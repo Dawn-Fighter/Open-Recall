@@ -1,0 +1,26 @@
+[
+  {
+    "title": "Known SRE: checkout CrashLoopBackOff",
+    "raw_alert": "SEV-2 prod checkout-service CrashLoopBackOff after deploy 2026.05.16. Pods restart every 40s. Last log: KeyError PAYMENT_PROVIDER_URL. Recent ConfigMap cleanup removed env var. 5xx on checkout started at 14:07 UTC."
+  },
+  {
+    "title": "Ambiguous: payments latency + DB pool",
+    "raw_alert": "P2 production payments-api p95 latency 8s and intermittent 503. Logs show timeout waiting for database connection from pool. Deploy happened yesterday, traffic normal, no obvious error owner."
+  },
+  {
+    "title": "Security: WAF SQL injection",
+    "raw_alert": "HIGH prod waf SQL injection alert grouped 63 requests against api-gateway /search?q=' OR 1=1--. Source ASN repeated across 12 IPs. Some 500s observed. Preserve request IDs and app logs."
+  },
+  {
+    "title": "Hybrid: JWT failures after key rotation",
+    "raw_alert": "SEV-2 production api-gateway JWT validation failures after key rotation. Login success but downstream API returns 401. Security relevance medium because auth boundary changed and old JWKS may still be cached."
+  },
+  {
+    "title": "Feature flag: frontend 5xx spike",
+    "raw_alert": "SEV-3 prod frontend 5xx spike immediately after feature flag checkout_redesign enabled for 25% of users. Errors mention Cannot read properties of undefined reading cart.total."
+  },
+  {
+    "title": "Learning loop: cold fraud scoring outage",
+    "raw_alert": "SEV-2 production fraud-scoring-api 502s after risk ruleset update. Logs show RuleEnginePanic invalid threshold band in RULE_SET_VERSION=2026.05.16. No existing runbook or known owner in alert notes."
+  }
+]

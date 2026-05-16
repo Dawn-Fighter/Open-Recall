@@ -1,0 +1,18 @@
+[project]
+name = "incident-memory-agent"
+version = "0.1.0"
+description = "Streamlit incident response cockpit with Hindsight memory and CascadeFlow-style routing traces."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+  "streamlit>=1.35.0",
+  "pydantic>=2.7.0",
+  "python-dotenv>=1.0.1",
+  "httpx>=0.27.0",
+  "hindsight-client>=0.1.0",
+  "cascadeflow[groq]>=0.1.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["incident_agent*"]
