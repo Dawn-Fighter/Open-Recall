@@ -17,6 +17,7 @@ build/
 
 # Runtime data
 data/local_memory.json
+data/calibration_log.json
 data/decision_cache.json
 
 # Hypothesis
