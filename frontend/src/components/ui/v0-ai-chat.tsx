@@ -403,6 +403,7 @@ function RetainPanel({ d, rawAlert, onRetained }: { d: TriageData; rawAlert: str
 }
 
 export function VercelV0Chat() {
+    const [activeTab, setActiveTab] = useState<"triage" | "calibration" | "soar" | "tenants">("triage");
     const [value, setValue] = useState("");
     const [messages, setMessages] = useState<Message[]>([]);
     const [isTyping, setIsTyping] = useState(false);
@@ -575,6 +576,25 @@ export function VercelV0Chat() {
                 </div>
             </div>
 
+            {/* Tab navigation */}
+            <div className="flex items-center gap-0 border-b border-border bg-card/50 px-2 shrink-0">
+                {([
+                    ["triage", "Triage"],
+                    ["calibration", "Calibration"],
+                    ["soar", "SOAR Webhooks"],
+                    ["tenants", "Tenants & Users"],
+                ] as const).map(([key, label]) => (
+                    <button key={key} onClick={() => setActiveTab(key)}
+                        className={cn("px-4 py-2 text-xs font-medium transition-colors border-b-2 -mb-px",
+                            activeTab === key
+                                ? "border-primary text-primary"
+                                : "border-transparent text-muted-foreground hover:text-foreground"
+                        )}>{label}</button>
+                ))}
+            </div>
+
+            {/* Tab content */}
+            {activeTab === "triage" ? (<>
             {/* Messages — scrollable area */}
             <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
                 {messages.length === 0 && (
@@ -687,6 +707,306 @@ export function VercelV0Chat() {
                     </div>
                 </div>
             </div>
+            </>) : activeTab === "calibration" ? (
+                <CalibrationPanel />
+            ) : activeTab === "soar" ? (
+                <SOARPanel />
+            ) : (
+                <TenantsPanel />
+            )}
+        </div>
+    );
+}
+
+function CalibrationPanel() {
+    const [metrics, setMetrics] = useState<Record<string, unknown> | null>(null);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        fetch(`${API_BASE}/calibration`).then(r => r.json()).then(setMetrics).catch(() => setMetrics(null)).finally(() => setLoading(false));
+    }, []);
+
+    if (loading) return <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">Loading calibration data…</div>;
+    if (!metrics) return <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">Could not load calibration data.</div>;
+
+    const total = (metrics.total_decisions as number) ?? 0;
+    const accuracy = (metrics.accuracy_pct as number) ?? 0;
+    const overrideRate = (metrics.override_rate_pct as number) ?? 0;
+    const eligible = (metrics.auto_close_eligible as boolean) ?? false;
+    const reason = (metrics.auto_close_reason as string) ?? "";
+    const perDecision = (metrics.per_decision as Record<string, Record<string, number>>) ?? {};
+    const buckets = (metrics.confidence_buckets as Array<Record<string, unknown>>) ?? [];
+
+    return (
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            <div>
+                <h2 className="text-lg font-bold text-foreground mb-1">Confidence Calibration</h2>
+                <p className="text-xs text-muted-foreground">Track proposed vs actual decisions to measure auto-triage accuracy over time.</p>
+            </div>
+
+            {/* Summary cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <StatCard label="Total Decisions" value={total.toString()} />
+                <StatCard label="Accuracy" value={`${accuracy}%`} color={accuracy >= 90 ? "text-green-400" : accuracy >= 70 ? "text-amber-400" : "text-red-400"} />
+                <StatCard label="Override Rate" value={`${overrideRate}%`} color={overrideRate <= 10 ? "text-green-400" : "text-amber-400"} />
+                <StatCard label="Auto-Close" value={eligible ? "Eligible" : "Not Yet"} color={eligible ? "text-green-400" : "text-muted-foreground"} />
+            </div>
+
+            {/* Auto-close status */}
+            <div className={cn("px-4 py-3 rounded-lg border text-sm", eligible ? "border-green-700 bg-green-950/50 text-green-300" : "border-border bg-muted/30 text-muted-foreground")}>
+                {eligible ? "✓ " : "○ "}{reason}
+            </div>
+
+            {/* Per-decision breakdown */}
+            {Object.keys(perDecision).length > 0 && (
+                <Section title="Per-Decision Breakdown" icon={<ListChecks className="w-3.5 h-3.5" />}>
+                    <div className="space-y-2">
+                        {Object.entries(perDecision).map(([decision, stats]) => (
+                            <div key={decision} className="flex items-center justify-between text-xs">
+                                <span className="font-medium capitalize">{decision.replace("_", " ")}</span>
+                                <span className="text-muted-foreground">
+                                    {stats.correct ?? 0} correct / {stats.overridden ?? 0} overridden of {stats.proposed ?? 0}
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                </Section>
+            )}
+
+            {/* Confidence buckets */}
+            {buckets.length > 0 && (
+                <Section title="Confidence Calibration Curve" icon={<Activity className="w-3.5 h-3.5" />}>
+                    <div className="space-y-2">
+                        {buckets.map((b, i) => (
+                            <div key={i} className="flex items-center gap-3 text-xs">
+                                <span className="w-16 text-muted-foreground">{b.range as string}</span>
+                                <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                                    <div className="h-full bg-primary rounded-full" style={{ width: `${b.accuracy_pct as number}%` }} />
+                                </div>
+                                <span className="w-12 text-right">{b.accuracy_pct as number}%</span>
+                                <span className="w-8 text-right text-muted-foreground">n={b.count as number}</span>
+                            </div>
+                        ))}
+                    </div>
+                </Section>
+            )}
+
+            {total === 0 && (
+                <div className="text-center text-muted-foreground text-sm py-8">
+                    No decisions tracked yet. Submit alerts via the Triage tab or SOAR webhooks to start building calibration data.
+                </div>
+            )}
+        </div>
+    );
+}
+
+function SOARPanel() {
+    const [platform, setPlatform] = useState<"splunk" | "sentinel" | "generic">("generic");
+    const [payload, setPayload] = useState('{"alert_text": "SEV-2 prod checkout-service CrashLoopBackOff", "severity": "SEV-2", "source": "splunk"}');
+    const [result, setResult] = useState<Record<string, unknown> | null>(null);
+    const [loading, setLoading] = useState(false);
+
+    const testWebhook = async () => {
+        setLoading(true);
+        setResult(null);
+        try {
+            const res = await fetch(`${API_BASE}/webhook/${platform}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: payload,
+            });
+            setResult(await res.json());
+        } catch { setResult({ status: "error", escalation_reason: "Could not reach backend" }); }
+        finally { setLoading(false); }
+    };
+
+    const templates: Record<string, string> = {
+        splunk: JSON.stringify({ container_id: 12345, container_name: "CrashLoop Alert", severity: "high", description: "SEV-2 prod checkout-service CrashLoopBackOff after deploy. KeyError PAYMENT_PROVIDER_URL.", label: "sre" }, null, 2),
+        sentinel: JSON.stringify({ incident_id: "INC-001", title: "SQL Injection on api-gateway", description: "HIGH prod waf SQL injection 63 requests against /search", severity: "High", tactics: ["InitialAccess"] }, null, 2),
+        generic: JSON.stringify({ alert_text: "SEV-2 prod checkout-service CrashLoopBackOff. KeyError PAYMENT_PROVIDER_URL.", severity: "SEV-2", source: "datadog" }, null, 2),
+    };
+
+    return (
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            <div>
+                <h2 className="text-lg font-bold text-foreground mb-1">SOAR Webhook Tester</h2>
+                <p className="text-xs text-muted-foreground">Test enrichment webhooks for Splunk SOAR, Microsoft Sentinel, or any generic SIEM.</p>
+            </div>
+
+            {/* Platform selector */}
+            <div className="flex gap-2">
+                {(["splunk", "sentinel", "generic"] as const).map(p => (
+                    <button key={p} onClick={() => { setPlatform(p); setPayload(templates[p]); setResult(null); }}
+                        className={cn("px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                            platform === p ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground"
+                        )}>{p === "splunk" ? "Splunk SOAR" : p === "sentinel" ? "Sentinel" : "Generic"}</button>
+                ))}
+            </div>
+
+            {/* Endpoint info */}
+            <div className="text-xs text-muted-foreground bg-muted/30 px-3 py-2 rounded-lg border border-border font-mono">
+                POST {API_BASE}/webhook/{platform}
+            </div>
+
+            {/* Payload editor */}
+            <div>
+                <label className="text-xs font-medium text-muted-foreground mb-1 block">Request Payload</label>
+                <textarea value={payload} onChange={e => setPayload(e.target.value)}
+                    className="w-full h-40 bg-black/40 text-green-400 font-mono text-xs p-3 rounded-lg border border-border resize-none focus:outline-none focus:border-primary" />
+            </div>
+
+            <button onClick={testWebhook} disabled={loading}
+                className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50">
+                {loading ? "Sending…" : "Send Test Webhook"}
+            </button>
+
+            {/* Result */}
+            {result && (
+                <Section title="Enrichment Response" icon={<Zap className="w-3.5 h-3.5" />}>
+                    <div className="space-y-2">
+                        <div className="flex items-center gap-3">
+                            <span className={cn("px-2 py-0.5 rounded text-xs font-semibold",
+                                result.status === "enriched" ? "bg-green-950 text-green-400" : "bg-red-950 text-red-400"
+                            )}>{String(result.status)}</span>
+                            {result.proposed_decision ? (
+                                <span className="text-xs font-medium capitalize">{String(result.proposed_decision).replace("_", " ")}</span>
+                            ) : null}
+                            {result.confidence !== undefined ? (
+                                <span className="text-xs text-muted-foreground">({(Number(result.confidence) * 100).toFixed(1)}%)</span>
+                            ) : null}
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div><span className="text-muted-foreground">Action:</span> <span className="font-medium">{String(result.recommended_action)}</span></div>
+                            <div><span className="text-muted-foreground">Auto-closeable:</span> <span className="font-medium">{result.auto_closeable ? "Yes" : "No"}</span></div>
+                            <div><span className="text-muted-foreground">Memory bypassed:</span> <span className="font-medium">{result.memory_bypassed ? "Yes" : "No"}</span></div>
+                            <div><span className="text-muted-foreground">Cost:</span> <span className="font-medium">${String(result.cost_usd)}</span></div>
+                            <div><span className="text-muted-foreground">Latency:</span> <span className="font-medium">{String(result.latency_ms)}ms</span></div>
+                            <div><span className="text-muted-foreground">Matches:</span> <span className="font-medium">{String(result.memory_match_count)}</span></div>
+                        </div>
+                        {Array.isArray(result.dead_ends) && result.dead_ends.length > 0 ? (
+                            <div className="text-xs"><span className="text-muted-foreground">Dead ends:</span> {(result.dead_ends as string[]).join("; ")}</div>
+                        ) : null}
+                        {result.escalation_reason ? (
+                            <div className="text-xs text-amber-400">{String(result.escalation_reason)}</div>
+                        ) : null}
+                    </div>
+                </Section>
+            )}
+        </div>
+    );
+}
+
+function TenantsPanel() {
+    const [tenants, setTenants] = useState<Array<Record<string, unknown>>>([]);
+    const [newName, setNewName] = useState("");
+    const [newBankId, setNewBankId] = useState("");
+    const [userForm, setUserForm] = useState({ tenantId: "default", email: "", name: "", role: "analyst" });
+    const [createdUser, setCreatedUser] = useState<Record<string, unknown> | null>(null);
+    const [loading, setLoading] = useState(true);
+
+    const refresh = () => {
+        fetch(`${API_BASE}/tenants`).then(r => r.json()).then(d => setTenants(d.tenants ?? [])).catch(() => {}).finally(() => setLoading(false));
+    };
+    useEffect(() => { refresh(); }, []);
+
+    const createTenant = async () => {
+        if (!newName.trim()) return;
+        const params = new URLSearchParams({ name: newName });
+        if (newBankId.trim()) params.set("bank_id", newBankId);
+        await fetch(`${API_BASE}/tenants?${params}`, { method: "POST" });
+        setNewName(""); setNewBankId("");
+        refresh();
+    };
+
+    const createUser = async () => {
+        if (!userForm.email.trim() || !userForm.name.trim()) return;
+        const params = new URLSearchParams({ email: userForm.email, display_name: userForm.name, role: userForm.role });
+        const res = await fetch(`${API_BASE}/tenants/${userForm.tenantId}/users?${params}`, { method: "POST" });
+        const data = await res.json();
+        setCreatedUser(data);
+        setUserForm({ ...userForm, email: "", name: "" });
+    };
+
+    if (loading) return <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">Loading…</div>;
+
+    return (
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            <div>
+                <h2 className="text-lg font-bold text-foreground mb-1">Tenants & Users</h2>
+                <p className="text-xs text-muted-foreground">Manage teams with isolated memory banks and role-based access.</p>
+            </div>
+
+            {/* Existing tenants */}
+            <Section title={`Tenants (${tenants.length})`} icon={<Database className="w-3.5 h-3.5" />}>
+                <div className="space-y-2">
+                    {tenants.map((t, i) => (
+                        <div key={i} className="flex items-center justify-between text-xs bg-muted/30 px-3 py-2 rounded-lg">
+                            <div>
+                                <span className="font-medium text-foreground">{t.name as string}</span>
+                                <span className="text-muted-foreground ml-2">({t.tenant_id as string})</span>
+                            </div>
+                            <span className="font-mono text-muted-foreground text-[10px]">bank: {t.memory_bank_id as string}</span>
+                        </div>
+                    ))}
+                </div>
+            </Section>
+
+            {/* Create tenant */}
+            <Section title="Create Tenant" icon={<Zap className="w-3.5 h-3.5" />}>
+                <div className="flex gap-2">
+                    <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="Team name"
+                        className="flex-1 px-3 py-1.5 bg-black/40 border border-border rounded-lg text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary" />
+                    <input value={newBankId} onChange={e => setNewBankId(e.target.value)} placeholder="Bank ID (optional)"
+                        className="flex-1 px-3 py-1.5 bg-black/40 border border-border rounded-lg text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary" />
+                    <button onClick={createTenant} className="px-3 py-1.5 bg-primary text-primary-foreground rounded-lg text-xs font-medium hover:bg-primary/90">Create</button>
+                </div>
+            </Section>
+
+            {/* Create user */}
+            <Section title="Create User" icon={<User className="w-3.5 h-3.5" />}>
+                <div className="space-y-2">
+                    <div className="flex gap-2">
+                        <select value={userForm.tenantId} onChange={e => setUserForm({ ...userForm, tenantId: e.target.value })}
+                            className="px-3 py-1.5 bg-black/40 border border-border rounded-lg text-xs text-foreground focus:outline-none focus:border-primary">
+                            {tenants.map((t, i) => <option key={i} value={t.tenant_id as string}>{t.name as string}</option>)}
+                        </select>
+                        <select value={userForm.role} onChange={e => setUserForm({ ...userForm, role: e.target.value })}
+                            className="px-3 py-1.5 bg-black/40 border border-border rounded-lg text-xs text-foreground focus:outline-none focus:border-primary">
+                            <option value="analyst">Analyst</option>
+                            <option value="senior">Senior Analyst</option>
+                            <option value="soc_lead">SOC Lead</option>
+                            <option value="admin">Admin</option>
+                        </select>
+                    </div>
+                    <div className="flex gap-2">
+                        <input value={userForm.email} onChange={e => setUserForm({ ...userForm, email: e.target.value })} placeholder="Email"
+                            className="flex-1 px-3 py-1.5 bg-black/40 border border-border rounded-lg text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary" />
+                        <input value={userForm.name} onChange={e => setUserForm({ ...userForm, name: e.target.value })} placeholder="Display name"
+                            className="flex-1 px-3 py-1.5 bg-black/40 border border-border rounded-lg text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary" />
+                        <button onClick={createUser} className="px-3 py-1.5 bg-primary text-primary-foreground rounded-lg text-xs font-medium hover:bg-primary/90">Create</button>
+                    </div>
+                </div>
+            </Section>
+
+            {/* Created user result */}
+            {createdUser && (
+                <div className="bg-green-950/50 border border-green-700 rounded-lg px-4 py-3 text-xs space-y-1">
+                    <div className="text-green-400 font-medium">User created successfully</div>
+                    <div className="text-green-300">Name: {(createdUser.user as Record<string, unknown>)?.display_name as string}</div>
+                    <div className="text-green-300">Role: {(createdUser.user as Record<string, unknown>)?.role as string}</div>
+                    <div className="font-mono text-green-400 bg-black/40 px-2 py-1 rounded mt-1">API Key: {createdUser.api_key as string}</div>
+                    <div className="text-muted-foreground mt-1">Save this key — it won&apos;t be shown again.</div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+function StatCard({ label, value, color }: { label: string; value: string; color?: string }) {
+    return (
+        <div className="bg-card border border-border rounded-lg px-3 py-2">
+            <div className="text-[10px] text-muted-foreground">{label}</div>
+            <div className={cn("text-lg font-bold", color ?? "text-foreground")}>{value}</div>
         </div>
     );
 }
