@@ -63,6 +63,13 @@ def smoke_queue() -> None:
         )
         return
 
+    # Reset the local fallback file BEFORE running so a previous partial
+    # failure (which never reached the post-test reset) cannot pollute this
+    # run's memory state. Without this, leftover retained memories from a
+    # crashed prior run can mask or amplify bypass behavior in unexpected
+    # ways.
+    (ROOT / "data" / "local_memory.json").write_text("[]", encoding="utf-8")
+
     # Reset module-level cached state so the queue test is independent.
     memory = IncidentMemory()
     router = CascadeFlowRouter()

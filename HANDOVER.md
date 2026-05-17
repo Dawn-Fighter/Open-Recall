@@ -1,34 +1,44 @@
 # Handover — OpenRecall
 
-This repository ships the OpenRecall alert triage cockpit, the supporting
-package code, the synthetic demo data, and the test suite. Live secrets
-(`.env`) and per-session retained memory (`data/local_memory.json`) are
-intentionally gitignored.
+This repository ships the OpenRecall alert triage cockpit: the FastAPI
+backend (`api.py`), the Next.js frontend (`frontend/`), the supporting
+package code (`incident_agent/`), the synthetic demo data, and the test
+suite. Live secrets (`.env`) and per-session retained memory
+(`data/local_memory.json`, `data/decision_cache.json`) are intentionally
+gitignored.
 
 ## Run It
 
+Two processes, two terminals.
+
 ```bash
-make install
-make run
+# Terminal 1 — FastAPI backend on http://127.0.0.1:8000
+make install    # python -m venv .venv && pip install -r requirements.txt
+cp .env.example .env  # then edit .env with your keys
+make api        # uvicorn api:app --reload --port 8000
+
+# Terminal 2 — Next.js cockpit on http://localhost:3000
+make frontend   # cd frontend && npm run dev
 ```
 
-Or manually:
+Or fully manual:
 
 ```bash
 python -m venv .venv
-# Linux / macOS
-source .venv/bin/activate
-# Windows
-# .venv\Scripts\activate
+source .venv/bin/activate           # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env  # then edit .env with your keys
-streamlit run app.py
+cp .env.example .env
+
+uvicorn api:app --reload --port 8000
+
+# in another shell
+cd frontend && npm install && npm run dev
 ```
 
 ## Validate It
 
 ```bash
-make compile  # python -m compileall ...
+make compile  # python -m compileall api.py incident_agent ...
 make pbt      # property-based tests under tests/property/
 make smoke    # offline smoke + queue smoke + .env.example schema
 ```
@@ -44,8 +54,10 @@ network access.
   retained triage decisions there during demos; the file is gitignored to
   prevent leaking analyst IDs, business-impact minutes, or fingerprint
   metadata into source control.
-- `.venv/`, `__pycache__/`, `.hypothesis/`, and other generated files are
-  gitignored.
+- `data/decision_cache.json` is **not tracked**. The API uses it as a
+  process-local hash cache for repeat alerts.
+- `frontend/.next/`, `frontend/node_modules/`, `.venv/`, `__pycache__/`,
+  `.hypothesis/`, and other generated files are gitignored.
 
 ## Before Pushing Public
 

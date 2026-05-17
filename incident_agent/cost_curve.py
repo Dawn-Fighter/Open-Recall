@@ -1,8 +1,8 @@
 """Cost curve tracker.
 
 Aggregates per-alert cost vs strong-model-only baseline across analyzed
-alerts in the current cockpit session. The tracker is intentionally a
-simple in-memory append-only series so Property 9 (cost <= baseline) and
+alerts in the current API process. The tracker is intentionally a simple
+in-memory append-only series so Property 9 (cost <= baseline) and
 Property 8 (mean cost decreases as memory grows) are easy to assert.
 """
 from __future__ import annotations
@@ -13,8 +13,10 @@ from .models import CostCurvePoint
 class CostCurveTracker:
     """In-memory time-ordered series of CostCurvePoint values.
 
-    Streamlit caches an instance per session via @st.cache_resource so
-    cumulative state survives reruns within a session.
+    The FastAPI backend (``api.py``) constructs a single tracker as a
+    module-level singleton so cumulative state persists across requests
+    within a process lifetime. Call ``reset()`` to clear the series
+    without re-creating the instance.
     """
 
     def __init__(self) -> None:
@@ -32,8 +34,9 @@ class CostCurveTracker:
     def reset(self) -> None:
         """Re-initialize the tracker state without re-creating the instance.
 
-        Useful when the cockpit caches the tracker via ``@st.cache_resource``
-        and an analyst wants to clear the cumulative cost series mid-session.
+        Useful when the FastAPI process holds a long-lived tracker and an
+        operator wants to clear the cumulative cost series mid-session
+        (for example, between demo recordings).
         """
         self._points.clear()
         self._cum_cost = 0.0

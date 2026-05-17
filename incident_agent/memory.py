@@ -15,6 +15,47 @@ SEED_PATH = ROOT / "data" / "seed_incidents.json"
 LOCAL_MEMORY_PATH = ROOT / "data" / "local_memory.json"
 
 
+def _run_hindsight_async(coro_factory: Any) -> Any:
+    """Run a hindsight-client async call in a way that survives Python 3.14
+    + aiohttp's strict task requirement.
+
+    The SDK's aiohttp session is bound to whatever event loop existed when
+    ``Hindsight()`` was constructed. Calling ``arecall``/``aretain`` from a
+    different loop later (which is what happens once FastAPI starts spinning
+    up worker threads) raises
+    ``RuntimeError: Timeout context manager should be used inside a task``.
+
+    To sidestep this, every Hindsight call accepts a *factory* callable that
+    creates a fresh SDK client AND runs the desired async method, then
+    closes the client — all inside a single ``asyncio.run`` event loop.
+    The TCP overhead of recreating the client per call is small (Hindsight
+    is HTTP-keepalive-irrelevant on a per-request basis).
+
+    ``coro_factory`` is an ``async def`` function (no args) that returns the
+    coroutine result. It MUST construct the SDK client itself.
+    """
+    import asyncio
+    import concurrent.futures
+
+    async def _wrap() -> Any:
+        return await coro_factory()
+
+    try:
+        asyncio.get_running_loop()
+        running = True
+    except RuntimeError:
+        running = False
+
+    if not running:
+        return asyncio.run(_wrap())
+
+    # An event loop is already running in this thread (e.g., we're being
+    # called from inside an async route handler). Hand off to a dedicated
+    # worker thread that will create and run its own loop.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, _wrap()).result()
+
+
 def _build_hindsight_client(base_url: str, api_key: str) -> Any:
     """Return a Hindsight client configured for the given base_url + api_key.
 
@@ -104,11 +145,23 @@ class IncidentMemory:
         Calling close() on the SDK client and dropping the reference prevents
         further calls from re-attempting Hindsight; subsequent calls take the
         local-fallback branch in recall/retain.
+
+        Logs the full traceback to stderr so operators can diagnose Hindsight
+        Cloud issues without having to re-attach a debugger.
         """
+        import sys
+        import traceback
+
         self.fallback_mode = True
         self.status = (
-            f"fallback mode: Hindsight {where} failed ({exc.__class__.__name__})"
+            f"fallback mode: Hindsight {where} failed "
+            f"({exc.__class__.__name__}: {exc!s})"
         )
+        print(
+            f"[OpenRecall] {self.status}",
+            file=sys.stderr,
+        )
+        traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
         if self.client is not None:
             close = getattr(self.client, "close", None)
             if callable(close):
@@ -121,7 +174,21 @@ class IncidentMemory:
     def recall(self, query: str, limit: int = 5) -> list[MemoryMatch]:
         if self.client is not None:
             try:
-                raw = self.client.recall(bank_id=self.bank_id, query=query)
+                async def _do_recall() -> Any:
+                    fresh = _build_hindsight_client(self.base_url, self.api_key)
+                    try:
+                        return await fresh.arecall(
+                            bank_id=self.bank_id, query=query
+                        )
+                    finally:
+                        aclose = getattr(fresh, "aclose", None)
+                        if callable(aclose):
+                            try:
+                                await aclose()
+                            except Exception:
+                                pass
+
+                raw = _run_hindsight_async(_do_recall)
                 matches = self._normalize_hindsight_results(raw)[:limit]
                 if matches:
                     return matches
@@ -146,7 +213,21 @@ class IncidentMemory:
 
         if self.client is not None:
             try:
-                raw = self.client.recall(bank_id=self.bank_id, query=canonical)
+                async def _do_recall() -> Any:
+                    fresh = _build_hindsight_client(self.base_url, self.api_key)
+                    try:
+                        return await fresh.arecall(
+                            bank_id=self.bank_id, query=canonical
+                        )
+                    finally:
+                        aclose = getattr(fresh, "aclose", None)
+                        if callable(aclose):
+                            try:
+                                await aclose()
+                            except Exception:
+                                pass
+
+                raw = _run_hindsight_async(_do_recall)
                 matches = self._normalize_hindsight_results(raw)[:limit]
                 if matches:
                     return matches
@@ -222,25 +303,73 @@ class IncidentMemory:
         else:
             merged_metadata = {**metadata, **new_metadata}
 
+        # Hindsight Cloud's SDK validates metadata as dict[str, str]: drop None
+        # values entirely and coerce lists / ints / bools to JSON / decimal
+        # strings so the call doesn't trip a Pydantic ValidationError on the
+        # client side. The richer Python-typed metadata is preserved for the
+        # local fallback record so MemoryMatch.metadata still surfaces lists.
+        def _coerce_for_cloud(value: Any) -> str | None:
+            if value is None:
+                return None
+            if isinstance(value, str):
+                return value
+            if isinstance(value, bool):
+                return "true" if value else "false"
+            if isinstance(value, (int, float)):
+                return str(value)
+            if isinstance(value, (list, tuple, set, dict)):
+                return json.dumps(list(value) if isinstance(value, set) else value, sort_keys=True)
+            return str(value)
+
+        cloud_metadata: dict[str, str] = {}
+        for k, v in merged_metadata.items():
+            coerced = _coerce_for_cloud(v)
+            if coerced is not None and coerced != "":
+                cloud_metadata[str(k)] = coerced
+
         if self.client is not None:
             try:
+                async def _do_retain_with_metadata() -> Any:
+                    fresh = _build_hindsight_client(self.base_url, self.api_key)
+                    try:
+                        return await fresh.aretain(
+                            bank_id=self.bank_id,
+                            content=content,
+                            context=context,
+                            timestamp=utc_now(),
+                            metadata=cloud_metadata,
+                        )
+                    finally:
+                        aclose = getattr(fresh, "aclose", None)
+                        if callable(aclose):
+                            try:
+                                await aclose()
+                            except Exception:
+                                pass
+
+                async def _do_retain_no_metadata() -> Any:
+                    fresh = _build_hindsight_client(self.base_url, self.api_key)
+                    try:
+                        return await fresh.aretain(
+                            bank_id=self.bank_id,
+                            content=content,
+                            context=context,
+                            timestamp=utc_now(),
+                        )
+                    finally:
+                        aclose = getattr(fresh, "aclose", None)
+                        if callable(aclose):
+                            try:
+                                await aclose()
+                            except Exception:
+                                pass
+
                 try:
-                    self.client.retain(
-                        bank_id=self.bank_id,
-                        content=content,
-                        context=context,
-                        timestamp=utc_now(),
-                        metadata=merged_metadata,
-                    )
+                    _run_hindsight_async(_do_retain_with_metadata)
                 except TypeError:
                     # SDK does not accept metadata=; retry without it. The
                     # in-process dedupe index still tracks the metadata key.
-                    self.client.retain(
-                        bank_id=self.bank_id,
-                        content=content,
-                        context=context,
-                        timestamp=utc_now(),
-                    )
+                    _run_hindsight_async(_do_retain_no_metadata)
                 return "retained in Hindsight"
             except Exception as exc:
                 self._flip_to_fallback(exc, "retain")
@@ -267,7 +396,21 @@ class IncidentMemory:
         )
         if self.client is not None and use_live_reflect:
             try:
-                reflection = self.client.reflect(bank_id=self.bank_id, query=query)
+                async def _do_reflect() -> Any:
+                    fresh = _build_hindsight_client(self.base_url, self.api_key)
+                    try:
+                        return await fresh.areflect(
+                            bank_id=self.bank_id, query=query
+                        )
+                    finally:
+                        aclose = getattr(fresh, "aclose", None)
+                        if callable(aclose):
+                            try:
+                                await aclose()
+                            except Exception:
+                                pass
+
+                reflection = _run_hindsight_async(_do_reflect)
                 return str(reflection)
             except Exception as exc:
                 self._flip_to_fallback(exc, "reflect")
@@ -290,18 +433,30 @@ class IncidentMemory:
                 "data/seed_incidents.json; start Hindsight to retain them in a live bank"
             )
         delay_seconds = float(os.getenv("HINDSIGHT_SEED_DELAY_SECONDS", "0"))
-        retained = 0
+        cloud_retained = fallback_retained = skipped = errored = 0
         for item in incidents:
             content = format_seed_memory(item)
-            self.retain(
-                content,
-                context=f"seed incident: {item['service']} {item['error_type']}",
-                metadata=item,
-            )
-            retained += 1
-            if delay_seconds > 0 and retained < len(incidents):
+            try:
+                status = self.retain(
+                    content,
+                    context=f"seed incident: {item['service']} {item['error_type']}",
+                    metadata=item,
+                )
+            except Exception:
+                errored += 1
+                continue
+            if "retained in Hindsight" in status:
+                cloud_retained += 1
+            elif "skipped duplicate" in status or "already had this memory" in status:
+                skipped += 1
+            else:
+                fallback_retained += 1
+            if delay_seconds > 0:
                 time.sleep(delay_seconds)
-        return f"seeded {retained} incident memories"
+        return (
+            f"seed: cloud={cloud_retained} fallback={fallback_retained} "
+            f"skipped={skipped} errored={errored} of {len(incidents)} total"
+        )
 
     def _normalize_hindsight_results(self, raw: Any) -> list[MemoryMatch]:
         if raw is None:
@@ -314,15 +469,33 @@ class IncidentMemory:
             candidates = getattr(raw, "results")
         else:
             candidates = [raw]
-        matches: list[MemoryMatch] = []
+
+        # Hindsight Cloud splits a single retained memory into multiple
+        # result rows by ``type``: usually ``observation`` (auto-extracted
+        # summary, no metadata), ``world`` (the original retain content,
+        # carries our metadata), and ``experience`` (analyst takeaway,
+        # carries our metadata too). Naive iteration drops the metadata
+        # for any document where the observation row outranks the
+        # world/experience rows. To preserve our analyst-confirmed
+        # ``triage_decision``/``dead_ends``/``fingerprint_canonical`` we:
+        #   1. Parse every row.
+        #   2. Group rows by ``document_id`` so siblings can share metadata.
+        #   3. For each row, attach the richest metadata from its document
+        #      group.
+        #   4. Decode JSON-stringified list values back to Python lists.
+        TYPE_RANK = {"experience": 3, "world": 2, "observation": 1}
+
+        # Pass 1: extract minimal record per row.
+        rows: list[dict[str, Any]] = []
         for idx, item in enumerate(candidates):
+            doc_id: str | None = None
+            kind: str = ""
+            score_default = max(0.4, 0.85 - idx * 0.08)
             if isinstance(item, str):
-                content, title, score, metadata = (
-                    item,
-                    title_from_content(item, idx),
-                    0.75,
-                    {},
-                )
+                content = item
+                title = title_from_content(item, idx)
+                score = 0.75
+                metadata: dict[str, Any] = {}
             elif isinstance(item, dict):
                 content = str(
                     item.get("content")
@@ -339,42 +512,128 @@ class IncidentMemory:
                     item.get("score")
                     or item.get("similarity")
                     or item.get("relevance")
-                    or max(0.4, 0.85 - idx * 0.08)
+                    or score_default
                 )
                 metadata = (
-                    item.get("metadata")
+                    dict(item.get("metadata"))
                     if isinstance(item.get("metadata"), dict)
                     else {}
                 )
+                doc_id = item.get("document_id")
+                kind = str(item.get("type") or "")
             elif hasattr(item, "text"):
                 content = str(getattr(item, "text"))
-                title = title_from_content(content, idx)
+                title = (
+                    str(getattr(item, "context", "") or "")
+                    or title_from_content(content, idx)
+                )
                 score = float(
                     getattr(item, "score", None)
                     or getattr(item, "similarity", None)
-                    or max(0.4, 0.85 - idx * 0.08)
+                    or score_default
                 )
-                metadata = {
-                    "hindsight_id": str(getattr(item, "id", "")),
-                    "hindsight_type": str(getattr(item, "type", "")),
-                }
+                # IMPORTANT: read the SDK's metadata attribute; previously
+                # the code dropped this and only stored hindsight_id/type.
+                raw_meta = getattr(item, "metadata", None)
+                metadata = dict(raw_meta) if isinstance(raw_meta, dict) else {}
+                metadata.setdefault("hindsight_id", str(getattr(item, "id", "")))
+                kind = str(getattr(item, "type", "") or "")
+                metadata["hindsight_type"] = kind
+                doc_id = getattr(item, "document_id", None)
             else:
-                content, title, score, metadata = (
-                    str(item),
-                    title_from_content(str(item), idx),
-                    0.6,
-                    {},
-                )
+                content = str(item)
+                title = title_from_content(content, idx)
+                score = 0.6
+                metadata = {}
+
+            # Decode JSON-stringified list/dict fields we coerced on the way
+            # IN so analysts see proper Python lists on the way OUT. Cf.
+            # ``_coerce_for_cloud`` in retain().
+            for k, v in list(metadata.items()):
+                if isinstance(v, str) and v and v[0] in "[{":
+                    try:
+                        decoded = json.loads(v)
+                        metadata[k] = decoded
+                    except (ValueError, TypeError):
+                        pass
+
+            rows.append(
+                {
+                    "title": title,
+                    "content": content,
+                    "score": score,
+                    "metadata": metadata,
+                    "doc_id": doc_id,
+                    "kind": kind,
+                    "idx": idx,
+                }
+            )
+
+        # Pass 2: per document_id, find the metadata-rich representative.
+        # A row "carries our metadata" if it has triage_decision OR
+        # fingerprint_canonical set.
+        def _carries_metadata(meta: dict[str, Any]) -> bool:
+            return bool(meta.get("triage_decision") or meta.get("fingerprint_canonical"))
+
+        doc_meta: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            did = row["doc_id"]
+            if not did or not _carries_metadata(row["metadata"]):
+                continue
+            existing = doc_meta.get(did)
+            if existing is None or TYPE_RANK.get(row["kind"], 0) > TYPE_RANK.get(
+                existing.get("hindsight_type", ""), 0
+            ):
+                doc_meta[did] = row["metadata"]
+
+        # Pass 3: collapse to one MemoryMatch per document_id (or per row if
+        # it has no document_id). Prefer the row with richer metadata + the
+        # higher result-type rank within the same document group.
+        seen_docs: set[str] = set()
+        matches: list[MemoryMatch] = []
+        for row in rows:
+            did = row["doc_id"]
+            if did and did in seen_docs:
+                continue
+            if did:
+                seen_docs.add(did)
+
+            # Inherit the document group's metadata if this row's own
+            # metadata is empty.
+            metadata = dict(row["metadata"])
+            if did and did in doc_meta:
+                for k, v in doc_meta[did].items():
+                    metadata.setdefault(k, v)
+
             matches.append(
                 MemoryMatch(
-                    title=title,
-                    content=content,
-                    score=min(score, 1.0),
+                    title=row["title"],
+                    content=row["content"],
+                    score=min(row["score"], 1.0),
                     source="hindsight",
                     metadata=cast(dict[str, Any], metadata),
                 )
             )
-        return dedupe_matches(matches)
+
+        # Pass 4: re-score client-side (RULE-MEMORY-04). Hindsight Cloud does
+        # not return relevance scores; the position-based defaults above are
+        # arbitrary. Matches that carry our triage_decision metadata are the
+        # ones the triage engine can actually use, so they must rank highest.
+        # Within each tier, preserve the original Hindsight ordering.
+        def _score_key(m: MemoryMatch) -> tuple[int, float]:
+            has_decision = 1 if m.metadata.get("triage_decision") else 0
+            return (has_decision, m.score)
+
+        ranked = sorted(dedupe_matches(matches), key=_score_key, reverse=True)
+        # Re-assign position-based scores. Metadata-rich matches get a
+        # gentler decay (0.02/pos) so up to 5 can qualify as Strong_Matches
+        # (score >= 0.85). Matches without triage_decision get steeper decay.
+        for i, m in enumerate(ranked):
+            if m.metadata.get("triage_decision"):
+                m.score = min(1.0, max(0.4, 0.95 - i * 0.02))
+            else:
+                m.score = min(1.0, max(0.4, 0.70 - i * 0.05))
+        return ranked
 
     def _load_seed_memory(self) -> list[dict[str, Any]]:
         memories: list[dict[str, Any]] = []
@@ -471,7 +730,14 @@ class IncidentMemory:
                 )
             )
         return dedupe_matches(
-            sorted(scored, key=lambda match: match.score, reverse=True)
+            sorted(
+                scored,
+                key=lambda match: (
+                    match.score,
+                    1 if match.metadata.get("triage_decision") else 0,
+                ),
+                reverse=True,
+            )
         )[:limit]
 
 

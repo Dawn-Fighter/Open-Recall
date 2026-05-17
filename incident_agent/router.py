@@ -67,9 +67,29 @@ class CascadeFlowRouter:
     ) -> tuple[dict[str, Any] | None, RouteTrace]:
         """Cheap-model JSON extract for the six AlertFingerprint fields (Task 9.1, R3.2/R3.5)."""
         prompt = (
-            "Extract a structured 'alert DNA' fingerprint from this signal as strict JSON.\n"
-            "Required keys (use empty string if not present): error_class, service_role, "
-            "dependency_pattern, signal_shape, attack_pattern, environment.\n\n"
+            "Extract a structured 'alert DNA' fingerprint from the signal below "
+            "as strict JSON. Output rules:\n"
+            "  - Return ONLY the JSON object, no prose.\n"
+            "  - All six keys MUST be present: error_class, service_role, "
+            "dependency_pattern, signal_shape, attack_pattern, environment.\n"
+            "  - All values MUST be lowercase, ASCII-only, no extra whitespace.\n"
+            "  - All values MUST be short canonical phrases (1-3 words max, "
+            "max 30 chars). Do NOT include version numbers, deploy hashes, "
+            "timestamps, region names, or commit IDs.\n"
+            "  - If a field cannot be determined from the alert text, return "
+            "an empty string \"\".\n"
+            "  - attack_pattern MUST be a security signature (e.g. "
+            "\"sql injection\", \"credential stuffing\", \"jwt\", \"xss\", "
+            "\"csrf\"). If the alert is NOT security-related, "
+            "attack_pattern MUST be \"\". Do NOT put deploy events, "
+            "feature flags, or operational signals here.\n"
+            "  - signal_shape is the symptom shape (e.g. \"crashloop\", "
+            "\"5xx\", \"timeout\", \"latency\", \"oom\"). Not free-text prose.\n"
+            "  - error_class is a short error category (e.g. \"keyerror\", "
+            "\"crashloopbackoff\", \"connectiontimeout\"), not a full message.\n"
+            "  - dependency_pattern is one of: postgres, database, redis, "
+            "smtp, stripe, identity, jwks, configmap, feature flag, or empty.\n"
+            "  - environment is one of: production, prod, staging, dev, qa.\n\n"
             f"Alert:\n{raw_alert}"
         )
         content, trace = self._call_model(
@@ -266,7 +286,11 @@ class CascadeFlowRouter:
             json={
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.1,
+                # Temperature 0 for maximum determinism on structured-extract
+                # tasks (fingerprint, normalize). Groq supports temperature=0;
+                # higher values cause subtle field-value drift across calls
+                # for the same alert text.
+                "temperature": 0.0,
                 "response_format": {"type": "json_object"},
             },
             timeout=20,

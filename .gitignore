@@ -14,7 +14,15 @@ build/
 *.egg-info/
 .DS_Store
 *.log
-.streamlit/secrets.toml
-data/local_memory.json
 
+# Runtime data
+data/local_memory.json
+data/decision_cache.json
+
+# Hypothesis
 .hypothesis/
+
+# Next.js / frontend
+frontend/.next/
+frontend/node_modules/
+frontend/out/

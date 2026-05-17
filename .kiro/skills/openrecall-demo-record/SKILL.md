@@ -39,97 +39,108 @@ cd incident-memory-agent
 
 3. **Reset local state.**
    ```bash
-   echo [] > data\local_memory.json    # Windows
+   echo [] > data/local_memory.json
+   echo {} > data/decision_cache.json
    ```
-   This wipes any leftover retained memory from previous demo runs so the
-   "before/after" cost curve is clean.
+   This wipes any leftover retained memory + alert hash cache from previous
+   demo runs so the "before/after" cost line is clean.
 
-4. **Start the cockpit.**
+4. **Start the backend.**
    ```bash
-   streamlit run app.py
+   uvicorn api:app --reload --port 8000
+   ```
+   Then in a second terminal:
+   ```bash
+   cd frontend && npm run dev
    ```
 
-5. **Verify the badges in the browser.** Top-right should show:
-   - ✅ `Hindsight connected` (green)
-   - ✅ `Live model calls` or `Deterministic model output` (whichever the
-     env vars say)
-   - Standard route OR Escalated route (depends on the sample alert loaded
-     in the sidebar — fine either way)
+5. **Verify mode flags.** Hit the API:
+   ```bash
+   curl -s http://127.0.0.1:8000/health | jq
+   ```
+   Confirm `hindsight_connected: true` and `groq_live: true`.
+
+6. **Open the cockpit.** Navigate to `http://localhost:3000`. The header
+   should reflect the same flags as `/health`.
 
 ## The 60-second beat sheet
 
 ### 0:00 — 0:10 — Hero shot
 
-Open the cockpit. Camera frames the badge row + hero copy. Cue: *"OpenRecall
-is an alert triage co-pilot. Memory first, LLM only when memory says so."*
+Camera frames the cockpit + browser tab title `OpenRecall Triage Copilot`.
+Cue: *"OpenRecall is an alert triage co-pilot. Memory first, LLM only when
+memory says so."*
 
-Point to the `Hindsight connected` badge to prove live integration.
+In a small overlay, show the `/health` JSON response proving live cloud
+integration.
 
-### 0:10 — 0:35 — Queue tab + cost curve
+### 0:10 — 0:35 — Submit a fresh alert
 
-Click `Queue` tab. Click `Use packaged seed alerts (100)`. Click `Analyze
-queue`.
+Paste a checkout-service crashloop alert into the chat input. Hit submit.
+Narrate the streaming agent steps as they appear:
 
-When the table populates:
+- Normalize: service detected
+- Fingerprint: six-field Alert DNA
+- Memory query: hit count
+- Routing OR memory bypass
+- Triage decision pill rendered
 
-- Point to the **per-batch summary** metric grid (`Auto-decided by memory`,
-  `Total savings`, `Percent saved`).
-- Point to the **Altair cost-curve chart** — red baseline line + blue
-  OpenRecall line + shaded green savings band. Cue: *"Red is what we'd
-  have paid running everything on the strong model. Blue is what we
-  actually paid. Green is cascadeflow earning its keep."*
-- Optional: read out one of the auto-decided rows by triage pill color
-  (green = false_positive auto-decided).
+Cue: *"Watch the agent's first move. It's the memory query, not the LLM."*
 
-### 0:35 — 0:55 — Override + retain
+### 0:35 — 0:55 — Inspect the triage card
 
-Pick any row whose triage pill is `escalated` (red) or `real` (orange).
-Click `Override`. In the form:
+Walk through the collapsible sections in order:
 
-- Decision: `false_positive`
-- Dead ends: `restarted DB pods, made it worse`
-- Click `Save & retain`
+- Decision pill (color-coded).
+- Fingerprint section — six structured fields (Alert DNA).
+- Prior incidents — top three matches with score and prior decision.
+- Cost line — actual cost, savings, latency.
+- Skip-these-paths panel — the dead ends from prior responders.
 
-Watch the row update. Cue: *"That decision and the dead end are now in
-Hindsight Cloud. The next analyst won't waste time restarting DB pods."*
+Cue: *"Cascadeflow earns its keep on every memory hit. The cost line is
+zero when memory bypasses."*
 
-### 0:55 — 1:25 — Re-analyze + bypass
+### 0:55 — 1:25 — Override + retain
 
-Click `Analyze queue` again. The same fingerprint family now reads
-`false_positive` with high confidence. Open one such row's audit-trace
-expander. Show:
+Open the override flow on the card. Set decision to `false_positive`. Add a
+dead end: *"restarted DB pods, made it worse"*. Click save & retain. Watch
+the success toast and the card update with the new decision.
 
-```
-Step: auto-triage bypass
-Model: memory-bypass | live: False | skipped: True
-Cost: $0.000000 | baseline: $0.000xxx | savings: $0.000xxx
-```
+Cue: *"That decision and the dead end are now in Hindsight Cloud. The next
+analyst won't waste time restarting DB pods."*
 
-Cue: *"Strong model never ran for those alerts. Property test P6 enforces
-this invariant across every release."*
+### 1:25 — 1:45 — Re-submit + bypass
 
-### 1:25 — 1:50 — Security-novel kill switch
+Paste the same alert again. Show:
+- Agent step trace shortcuts to "memory bypass" / "served from decision cache".
+- Decision pill matches the override.
+- Cost line reads `$0.00` with full savings.
 
-Switch to the **Single alert** tab. From the sidebar dropdown, pick
-`Security: WAF SQL injection`. Click `Analyze incident`.
+Switch to a terminal and hit `GET /cost-curve`. Point to the new bypass
+point with `cost: 0` and `baseline` preserved.
 
-Show the audit trace. Even with high memory consistency, the row shows:
+Cue: *"Strong model never ran. Property test P6 enforces this invariant
+across every release."*
 
-- Triage pill: `escalated` or `real`
+### 1:45 — 2:00 — Security-novel kill switch
+
+Submit a security-flavoured alert (WAF SQL injection on api-gateway). Show
+that even with consistent memory, the card surfaces:
+
+- Decision pill: `escalated` or `real`
 - Escalation reason: `security-novel: human approval required`
-- `requires_human_approval: True`
+- `requires_human_approval: true`
 
-Cue: *"Attack pattern non-empty means human approval required regardless of
-memory state. The agent never auto-dismisses a real attack."*
+Cue: *"Attack pattern non-empty fires the security-novel kill switch
+regardless of memory state. The agent recommends, the human decides."*
 
-### 1:50 — 2:00 — Rubric close
+### Rubric close
 
 ```
 Innovation:      counterfactual memory + memory-bypass RouteTrace
 Memory & flow:   memory is the agent's first move, cost is visible per alert
-Technical:       17 Hypothesis property tests, deterministic CI seed,
-                 21 tests passing in CI
-UX:              two-tab cockpit, color-coded triage pills, Altair cost curve
+Technical:       17 Hypothesis property tests, deterministic CI seed
+UX:              streaming agent steps, color-coded triage pills, structured triage card
 Real-world:      SOC analysts and on-call SREs both stare at alert queues
 ```
 
@@ -137,26 +148,22 @@ Cue: *"Stop rediscovering the same triage decisions every on-call shift."*
 
 ## Troubleshooting
 
-### "The cost curve is flat / no bypass fires"
+### "The cost line stays at the strong-model price / no bypass fires"
 
 Likely cause: live mode is hitting Hindsight Cloud but the bank is empty
-(no prior decisions to be consistent with). Fix: in the sidebar, click
-`Seed 5 memories into Hindsight`. Wait ~10 seconds. Re-run `Analyze queue`.
+(no prior decisions to be consistent with). Fix: hit
+`POST http://127.0.0.1:8000/seed` to push the seed incidents. Wait ~10
+seconds. Re-submit the same alert.
 
-If still flat: check that the cockpit shows `Hindsight connected` (not
-`Fallback memory`). If fallback, env vars are missing or the API key is
-revoked.
+If still flat: check that `/health` returns `hindsight_connected: true`.
+If `false`, env vars are missing or the API key is revoked.
 
-### "Live model calls badge is missing"
+### "groq_live is false in /health"
 
 `CASCADEFLOW_LIVE_GROQ=true` is required AND `GROQ_API_KEY` must be set in
-the `.env` file. The `load_dotenv()` call in `app.py` reads from
-`incident-memory-agent/.env`. Restart Streamlit after editing `.env`.
-
-### "Streamlit shows AttributeError on a queue row"
-
-Most likely the `cost_tracker` cached resource holds state from a previous
-run. Click `Reset cost curve` in the queue tab header.
+the `.env` file. The `load_dotenv()` call in `api.py` reads from
+`incident-memory-agent/.env`. Restart the FastAPI process after editing
+`.env` (uvicorn `--reload` only watches `.py` files).
 
 ### "Smoke test reports `bypass_steps=0`"
 
@@ -170,27 +177,33 @@ cd incident-memory-agent
 python -m pytest tests/property/test_triage.py::test_strong_model_bypass_invariant -q --hypothesis-profile=ci -v
 ```
 
-If that test passes but smoke fails, the `_local_recall` keyword scorer
+If that test passes but smoke fails, the local-recall keyword scorer
 likely changed and no longer crosses 0.85 against the seeded memories. Add
 more overlapping content text to the smoke seed list (in `smoke_queue()`).
 
 ### "Hindsight Cloud returns 401"
 
 The API key has been revoked or rotated. Check the Vectorize dashboard.
-Replace `HINDSIGHT_API_KEY` in `.env`. The cockpit will pick up the new
-value on the next Streamlit rerun.
+Replace `HINDSIGHT_API_KEY` in `.env` and restart uvicorn.
 
-### "Recording shows `Fallback memory` instead of `Hindsight connected`"
+### "/health returns hindsight_connected: false"
 
-`HINDSIGHT_API_KEY` is unset OR `HINDSIGHT_BASE_URL` returned 5xx. The 2-second
-HEAD probe in `_init_hindsight` is what flips the badge. Check connectivity
-and key validity, then restart Streamlit.
+`HINDSIGHT_API_KEY` is unset OR `HINDSIGHT_BASE_URL` returned 5xx. The
+2-second HEAD probe in `_init_hindsight` is what flips fallback. Check
+connectivity and key validity, then restart uvicorn.
+
+### "The frontend shows a network error on /analyze"
+
+Confirm both processes are running: `curl http://127.0.0.1:8000/health`
+should respond, and `http://localhost:3000` should load. If CORS is
+blocking, confirm `api.py` still has `CORSMiddleware` with
+`allow_origins=["*"]`.
 
 ## Recording hardware/software notes
 
-- Use OBS Studio or Streamlit's built-in screenshot. Disable browser
+- Use OBS Studio or any system screen recorder. Disable browser
   notifications and any notification trays.
-- 1080p recommended. The Altair chart renders cleanly at that resolution.
+- 1080p recommended.
 - Include audio narration. Mute system sound effects.
 - Keep the recording under 2:00. Hackathon judging panels skip videos
   longer than 2 minutes.

@@ -1,6 +1,6 @@
 ---
 name: openrecall-mode-debug
-description: Diagnose which of the four OpenRecall mode-matrix quadrants is currently active and why. Use when the cockpit's badge row shows an unexpected mode, when bypass isn't firing, when the cost curve looks wrong, or when fallback mode is engaging unexpectedly.
+description: Diagnose which of the four OpenRecall mode-matrix quadrants is currently active and why. Use when the cockpit's mode flags show an unexpected mode, when bypass isn't firing, when the cost curve looks wrong, or when fallback mode is engaging unexpectedly.
 ---
 
 # Diagnose OpenRecall mode-matrix issues
@@ -11,12 +11,12 @@ which one is active and what's gating the desired one.
 
 ## The four quadrants
 
-| Quadrant | `HINDSIGHT_API_KEY` | `CASCADEFLOW_LIVE_GROQ` | Recall path | Fingerprint path | UI badges |
+| Quadrant | `HINDSIGHT_API_KEY` | `CASCADEFLOW_LIVE_GROQ` | Recall path | Fingerprint path | `/health` flags |
 |---|---|---|---|---|---|
-| **A: Cloud + Live** | set, host reachable | `true` + `GROQ_API_KEY` | Hindsight Cloud first | Live cheap-model JSON | Hindsight connected + Live model calls |
-| **B: Cloud + Demo** | set, host reachable | `false` | Hindsight Cloud first | Regex fallback | Hindsight connected + Deterministic model output |
-| **C: Local + Live** | unset OR unreachable | `true` + key set | local JSON | Live cheap-model JSON | Fallback memory + Live model calls |
-| **D: Local + Demo** | unset OR unreachable | `false` | local JSON | Regex fallback | Fallback memory + Deterministic model output |
+| **A: Cloud + Live** | set, host reachable | `true` + `GROQ_API_KEY` | Hindsight Cloud first | Live cheap-model JSON | `hindsight_connected=true` + `groq_live=true` |
+| **B: Cloud + Demo** | set, host reachable | `false` | Hindsight Cloud first | Regex fallback | `hindsight_connected=true` + `groq_live=false` |
+| **C: Local + Live** | unset OR unreachable | `true` + key set | local JSON | Live cheap-model JSON | `hindsight_connected=false` + `groq_live=true` |
+| **D: Local + Demo** | unset OR unreachable | `false` | local JSON | Regex fallback | `hindsight_connected=false` + `groq_live=false` |
 
 For the hackathon recording, you want quadrant **A**. For CI and offline
 demos, quadrant **D**. Quadrants B and C are useful intermediate-debug
@@ -25,13 +25,13 @@ modes.
 ## Diagnostic flowchart
 
 ```
-Step 1: cockpit badge row reads "Hindsight connected" or "Fallback memory"?
-  Hindsight connected   → memory is in cloud quadrant (A or B)
-  Fallback memory       → memory is in local quadrant (C or D)
+Step 1: curl http://127.0.0.1:8000/health | jq .hindsight_connected
+  true  → memory is in cloud quadrant (A or B)
+  false → memory is in local quadrant (C or D)
 
-Step 2: cockpit badge row reads "Live model calls" or "Deterministic model output"?
-  Live model calls          → router is in live quadrant (A or C)
-  Deterministic model output → router is in demo quadrant (B or D)
+Step 2: curl http://127.0.0.1:8000/health | jq .groq_live
+  true  → router is in live quadrant (A or C)
+  false → router is in demo quadrant (B or D)
 
 Step 3: cross-reference these two answers in the table above to identify
 the quadrant.
@@ -49,8 +49,9 @@ Fix:
 CASCADEFLOW_LIVE_GROQ=true
 GROQ_API_KEY=gsk_...   # ensure this is set
 ```
-Restart Streamlit (`Ctrl+C` then `streamlit run app.py`). Streamlit's
-`load_dotenv` runs at startup; in-flight env edits don't take effect.
+Restart the FastAPI process (`Ctrl+C` then `uvicorn api:app --reload --port 8000`).
+`load_dotenv` runs at module import; uvicorn's `--reload` only watches
+`.py` files, so an `.env` edit alone is not picked up.
 
 ### Expected A, got C (Live Groq ok, but Fallback memory)
 
@@ -86,12 +87,11 @@ Interpret:
 Both above checks fail. Most likely explanations in order:
 
 1. The `.env` file isn't being loaded (working directory mismatch). The
-   `app.py` `load_dotenv(ROOT / ".env")` line uses `ROOT =
-   Path(__file__).resolve().parent` so it loads
-   `incident-memory-agent/.env`. Run streamlit FROM `incident-memory-agent/`.
+   `api.py` `load_dotenv(Path(__file__).parent / ".env")` line loads
+   `incident-memory-agent/.env`. Run uvicorn FROM `incident-memory-agent/`.
 2. The session was previously flipped to fallback after a per-request
    failure (`_flip_to_fallback` closes the client for the rest of the
-   session). Restart Streamlit to re-init.
+   session). Restart uvicorn to re-init.
 3. `cascadeflow` package isn't installed. Run `pip install
    cascadeflow[groq]>=0.1.0`.
 
@@ -109,12 +109,12 @@ bypass = (
 
 If you expected bypass and didn't get it, check in this order:
 
-1. **Triage decision.** Open the audit-trace expander on the alert. Look
-   at `proposed_decision`. If it's `escalated` or `real`, bypass won't
-   fire by design — that's the spec contract.
+1. **Triage decision.** Inspect the `/analyze` response. Look at
+   `decision`. If it's `Escalated` or `Real`, bypass won't fire by
+   design — that's the spec contract.
 
-2. **Triage confidence.** Look at the confidence value on the queue row.
-   If it's below 0.85, the bypass threshold isn't crossed.
+2. **Triage confidence.** Look at `confidence` in the response. If it's
+   below 85%, the bypass threshold isn't crossed.
 
    Reference table for `confidence(c=1.0, n)`:
 
@@ -145,51 +145,36 @@ If you expected bypass and didn't get it, check in this order:
 
 ## Why the cost curve is flat (second most common report)
 
-The cost curve renders only when `len(tracker.series()) >= 2`. With one
-analyzed alert, no chart shows.
+The cost curve series at `GET /cost-curve` is empty or flat when:
 
-If you have ≥2 alerts and the curve is still flat:
-
+- No alerts have been analyzed yet → `points: []`.
 - In quadrant D (Local + Demo), every alert costs $0.0 because no live
-  LLM calls happen. The chart shows two horizontal lines at zero. This is
-  EXPECTED for offline mode.
-- In quadrant A (Cloud + Live), the chart should show meaningful cost.
-  If both series sit at the same y-value (no green band), bypass isn't
+  LLM calls happen. The series is real but every `cost` and `baseline`
+  pair is at the deterministic offline price. This is EXPECTED for
+  offline mode.
+- In quadrant A (Cloud + Live), the curve should show meaningful cost.
+  If `cost == baseline` for every point (no savings), bypass isn't
   firing — go through the bypass diagnostic above.
 
 ## Why retain isn't surfacing in the next analysis
 
-After clicking `Save & retain`, the cockpit immediately re-runs
-`workflow.analyze` for that row. The new memory should appear in the
-result.
+After a `POST /retain` succeeds, the alert hash cache (`data/decision_cache.json`)
+is updated AND the memory store gets the new entry. The cockpit should
+trigger a fresh `POST /analyze` with the same alert text and see the
+cached decision.
 
 If it doesn't:
 
-1. Check the retain status returned by the form. Should say `"retained in
-   Hindsight"` or `"retained in local JSON fallback"`. If it says
-   `"skipped duplicate"`, the dedupe key already existed (correct
+1. Check the retain response. Should say `status: "retained"`. If it
+   says `"skipped duplicate"`, the dedupe key already existed (correct
    behavior — P7 idempotence).
 2. In quadrant A/B, verify the cloud retain succeeded by checking the
    Hindsight UI for the new memory in the `openrecall` bank.
 3. In quadrant C/D, check `incident-memory-agent/data/local_memory.json`
    was written to.
-
-## Mode badge cheat sheet
-
-| Badge color | Meaning |
-|---|---|
-| Green `Hindsight connected` | Cloud OK, mid-A or mid-B |
-| Yellow `Fallback memory` | Cloud unreachable or key unset, mid-C or mid-D |
-| Plain `Live model calls` | Real Groq calls firing |
-| Plain `Deterministic model output` | Demo_Mode, no live Groq |
-| Plain `Standard route` | Last RouteTrace was not escalated |
-| Plain `Escalated route` | Last RouteTrace was escalated |
-
-The bottom-left of the cockpit also shows the **memory status string**
-(e.g., `connected to Hindsight Cloud at https://api.hindsight.vectorize.io
-/ bank openrecall`) and the **router status string** (e.g., `cascadeflow
-initialized in observe mode`). These are the most authoritative source —
-the badges are a UI summary.
+4. Confirm the retained `raw_alert` matches the re-submitted alert text
+   exactly (the hash cache normalizes whitespace + case but not e.g.
+   timestamp variations).
 
 ## When all else fails
 
@@ -199,8 +184,8 @@ python scripts/smoke_test.py
 ```
 
 If smoke is green, the code is fine. The issue is environmental — most
-likely an env var, network, or Streamlit caching glitch. Restart everything:
-quit Streamlit, clear `__pycache__/`, re-run smoke, re-launch cockpit.
+likely an env var or network glitch. Restart everything: kill uvicorn,
+clear `__pycache__/`, re-run smoke, re-launch uvicorn and `npm run dev`.
 
 If smoke is red, you have a real regression. Run the property-test suite
 (`make pbt`) to identify which invariant broke and which file owns it

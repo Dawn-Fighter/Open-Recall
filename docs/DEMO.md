@@ -6,83 +6,106 @@ Hindsight Cloud + Live Groq mode for the strongest recording.
 ## 0. Pre-flight (10 seconds before recording)
 
 ```bash
+# Terminal 1 — backend
 export HINDSIGHT_API_KEY=hsk_your_key_here
 export GROQ_API_KEY=gsk_your_key_here
 export CASCADEFLOW_LIVE_GROQ=true
-streamlit run app.py
+uvicorn api:app --reload --port 8000
+
+# Terminal 2 — frontend
+cd frontend && npm run dev
 ```
 
-Confirm the badges read **Hindsight connected** and **Live model calls** in the
-single-alert tab. If they read fallback or deterministic, the workflow still
-demos but the live integration is not proven.
+In a third shell, sanity-check the live mode:
 
-## 1. Open the Queue tab (0:00 - 0:10)
+```bash
+curl -s http://127.0.0.1:8000/health | jq
+```
 
-Click the `Queue` tab. Click **`Use packaged seed alerts (100)`**, then
-**`Analyze queue`**.
+`hindsight_connected` and `groq_live` should both be `true`. If either is
+`false` the workflow still demos, but the live integration is not proven.
 
-Cue: *"This is 100 real-shaped alerts mixed across 8 repeating fingerprint
-families plus 30 false positives, 15 novel reals, and 5 ambiguous."*
+Open `http://localhost:3000` in the browser.
 
-## 2. The cost curve (0:10 - 0:30)
+## 1. Submit a fresh alert (0:00 - 0:15)
 
-Point to the **Cost curve** chart that appears above the queue table:
-- Red line: strong-model-only baseline cost per alert.
-- Blue line: actual cost paid by OpenRecall.
-- Green band: savings from memory.
+Paste a raw alert into the chat input — for example a checkout-service
+crashloop after a configmap deploy. Click submit.
 
-Cue: *"This is cascadeflow earning its keep. Every memory hit collapses one
-red point onto the blue line. The wider the green band, the more we saved."*
+Cue: *"Memory first, LLM only when memory says so. Watch the agent steps
+unfold in order."*
 
-Point to the per-batch summary metrics: **Auto-decided by memory** and
-**Total savings**. Read out the percentages.
+Watch the streaming agent steps:
+- Normalize → service detected
+- Fingerprint → six-field Alert DNA extracted
+- Memory query → recall hits surfaced (or "novel pattern")
+- Routing decision → strong model or memory-bypass
+- Triage → decision pill rendered
 
-## 3. Override an escalated alert (0:30 - 0:45)
+## 2. Inspect the triage card (0:15 - 0:30)
 
-Pick any row whose triage badge reads `escalated`. Click **`Override`**.
-- Decision: `false_positive`
-- Dead ends: `restarted DB pods, made it worse`
-- Click **`Save & retain`**
+Point to:
+- The decision pill (color-coded: green for `false_positive` / `known_benign` / `duplicate`, red for `escalated`, amber otherwise).
+- The fingerprint section — six structured fields, not free-text keywords.
+- The prior incidents block — top three memory matches with score and prior decision.
+- The cost line — actual cost, savings, latency.
+- The dead-ends panel — paths prior responders already disproved.
 
-Watch the row update. Cue: *"This decision and the dead end are now in
-Hindsight Cloud. The next analyst won't waste time restarting DB pods."*
+Cue: *"This is what counterfactual memory looks like. The agent doesn't
+just say 'try X'; it tells the next responder 'don't try Y, the team
+already disproved that.'"*
 
-## 4. Re-run the queue (0:45 - 0:55)
+## 3. Override and retain (0:30 - 0:45)
 
-Click **`Analyze queue`** again. Watch:
-- The same fingerprint family that was escalated last time now reads
-  `false_positive` with high confidence.
-- The cost curve flattens near zero for those rows.
-- The audit trace expander shows `model: memory-bypass` and `llm_skipped: True`.
+Open the override flow on the triage card. Set the decision to
+`false_positive`. Add a dead end: *"restarted DB pods, made it worse."*
+Click save & retain.
 
-Cue: *"The strong model didn't run for those alerts. Hindsight + cascadeflow
-caught it before the LLM call. Property test P6 enforces this invariant
-across every release."*
+Behind the scenes the cockpit calls `POST /retain`. The decision and
+dead end are written to Hindsight Cloud (or the local fallback store
+when offline).
+
+Cue: *"That decision and the dead end are now in Hindsight Cloud. The
+next analyst won't restart DB pods."*
+
+## 4. Re-submit the same alert (0:45 - 0:55)
+
+Paste the same raw alert again. Watch:
+- The agent step trace shortcuts to "memory bypass" / "served from
+  decision cache".
+- The decision pill matches the override.
+- The cost line reads `$0.00` with full savings.
+
+Cue: *"The strong model didn't run. Property test P6 enforces this
+invariant across every release."*
+
+Optional: hit `GET /cost-curve` to confirm the curve has the new bypass
+point with `cost: 0` and the original `baseline` preserved — that's the
+Property 9 invariant (`cost_usd <= baseline_cost_usd`).
 
 ## 5. Single alert security demo (0:55 - 1:00)
 
-Switch to the **Single alert** tab. Pick `Security: WAF SQL injection`.
-Show the **Hindsight connected**, **Live model calls** badges, and the
-audit trace.
+Submit a security-flavoured alert (e.g. WAF SQL injection signature on
+the api-gateway). Even if memory is consistent, the agent should set
+`requires_human_approval=true` and surface "security novel — analyst
+must review" in the escalation reason.
 
-Cue: *"`attack_pattern` is non-empty, so the security-novel kill switch
-fires regardless of memory state. Even if we had 50 consistent strong
-matches, the analyst gets human-approval prompted before the decision is
-applied."*
+Cue: *"Attack pattern non-empty fires the security-novel kill switch
+regardless of memory state. The agent recommends, the human decides."*
 
-## What to point to
+## What to point to throughout
 
-Throughout the demo, call out:
-- **Hindsight connected** badge — proves live cloud integration.
-- **Cost curve drop** — proves cascadeflow value.
-- **Memory-bypass RouteTrace** in the audit expander — proves zero LLM
-  cost on memory-consistent repeats.
-- **Skip these paths** panel — proves counterfactual memory works
+- `/health` badges — proves live cloud integration.
+- Cost line dropping to `$0.00` after retain — proves cascadeflow value.
+- Memory-bypass step in the agent trace — proves zero LLM cost on
+  memory-consistent repeats.
+- Skip-these-paths panel — proves counterfactual memory works
   end-to-end.
 
 ## Offline fallback
 
-If the demo machine has no network, omit the live env vars. The cockpit
-falls back to local JSON memory and deterministic regex fingerprints. The
-cost curve, queue table, override flow, and audit trace all still work —
-only the `Live model calls` badge flips to `Deterministic model output`.
+If the demo machine has no network, omit the live env vars before
+starting the backend. The cockpit falls back to local JSON memory and
+deterministic regex fingerprints. The triage card, override flow, cost
+line, and audit trace all still work — only the `/health` flags flip to
+`hindsight_connected: false` and `groq_live: false`.

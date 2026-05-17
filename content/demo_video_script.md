@@ -1,52 +1,64 @@
 # 2-minute demo script — OpenRecall
 
-0:00 - 0:10 — Open the cockpit. Confirm `Hindsight connected` and `Live model
-calls` badges. Cue: "OpenRecall is an alert triage co-pilot. Memory first,
-LLM only when memory says so."
+0:00 - 0:10 — Pre-flight. Show two terminals: `uvicorn api:app --reload`
+on :8000 and `npm run dev` in `frontend/` on :3000. Hit
+`http://127.0.0.1:8000/health` and read out `hindsight_connected: true`,
+`groq_live: true`.
 
-0:10 - 0:35 — Click `Queue` tab. Click `Use packaged seed alerts (100)`. Click
-`Analyze queue`. Wait for the cost curve to render. Point to:
-- Per-batch summary: alert count, auto-decided by memory, escalated, total
-  savings, percent saved.
-- The Altair chart with the green savings band.
-- Queue table rows with triage badges (green for false_positive, red for
-  escalated).
+Cue: "OpenRecall is an alert triage co-pilot. Memory first, LLM only
+when memory says so."
 
-Cue: "Cascadeflow earns its keep on every memory hit. Red line is the
-strong-model-only baseline; blue line is what we actually paid; green
-band is the savings memory bought us."
+0:10 - 0:30 — Open `http://localhost:3000`. Paste a checkout-service
+crashloop alert into the chat input. Hit submit. Narrate the streaming
+agent steps as they appear:
+- Normalize → service detected
+- Fingerprint → six structured fields extracted
+- Memory query → hits / no hits
+- Routing → strong model OR memory-bypass
+- Triage decision pill rendered
 
-0:35 - 0:55 — Pick an escalated row. Click `Override`. Set decision to
-`false_positive`. Add a dead end: "restarted DB pods, made it worse". Click
-`Save & retain`. Watch the row update.
+Cue: "Watch the agent's first move. It's the memory query, not the
+LLM."
 
-Cue: "That decision and the dead end are now in Hindsight Cloud. The next
-analyst won't restart DB pods."
+0:30 - 0:55 — Inspect the triage card:
+- Decision pill (color-coded).
+- Fingerprint section (Alert DNA, six fields).
+- Prior incidents list (top three matches with score + prior decision).
+- Cost line: actual cost, savings, latency.
+- Skip-these-paths panel (the dead ends from prior responders).
 
-0:55 - 1:25 — Click `Analyze queue` again. Point to:
-- The same fingerprint family now reads `false_positive` with high
-  confidence.
-- The cost curve flattens near zero for the repeats.
-- Open one row's audit trace expander. Show `model: memory-bypass`,
-  `llm_skipped: True`, `cost: $0.000000`.
+Cue: "Cascadeflow earns its keep on every memory hit. The cost line is
+zero when memory bypasses."
 
-Cue: "Strong model never ran for those alerts. Property test P6 enforces
-this invariant across every release."
+0:55 - 1:20 — Click the override flow on the card. Set decision to
+`false_positive`. Add a dead end: "restarted DB pods, made it worse."
+Save & retain. Watch the success toast.
 
-1:25 - 1:50 — Switch to `Single alert` tab. Pick `Security: WAF SQL
-injection`. Run analysis. Show the audit trace and the security-novel
-kill switch in the escalation reason.
+Cue: "That decision and the dead end are now in Hindsight Cloud. The
+next analyst won't restart DB pods."
 
-Cue: "Attack pattern non-empty means human-approval required regardless
-of memory state. The agent never auto-dismisses a real attack."
+1:20 - 1:45 — Paste the same alert again. Show:
+- The agent step trace shortcuts to "memory bypass" / "served from
+  decision cache".
+- Decision pill matches the override.
+- Cost line reads `$0.00` with full savings.
+- Hit `GET /cost-curve` in another tab, point to the new bypass point
+  with `cost: 0` and `baseline` preserved.
 
-1:50 - 2:00 — Close on the rubric:
+Cue: "Strong model never ran. Property test P6 enforces this invariant
+across every release."
+
+1:45 - 2:00 — Submit a security-flavoured alert (WAF SQL injection on
+api-gateway). Show that even with consistent memory, the card surfaces
+`requires_human_approval: true` and a security-novel rationale.
+
+Close on the rubric:
 - Innovation: counterfactual memory + memory-bypass RouteTrace.
 - Hindsight + cascadeflow centrality: memory is the agent's first move,
-  cost is visible per alert.
-- Technical: 15 Hypothesis property tests, deterministic CI seed,
-  21 tests passing.
-- UX: two-tab cockpit, color-coded triage pills, Altair cost curve.
+  cost is visible per alert via the API.
+- Technical: 15 Hypothesis property tests under a deterministic CI seed.
+- UX: streaming agent steps, color-coded triage pills, inline override
+  flow, structured triage card.
 - Real-world: SOC analysts and on-call SREs both stare at alert queues.
 
 Cue: "Stop rediscovering the same triage decisions every on-call shift."

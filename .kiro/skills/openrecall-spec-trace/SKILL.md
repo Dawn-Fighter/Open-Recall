@@ -27,7 +27,8 @@ Verify with:    <commands to run>
 | `incident_agent/cost_curve.py` | In-memory cost series | P8, P9 |
 | `incident_agent/audit.py` | AuditTraceRecorder | P15 |
 | `incident_agent/workflow.py` | Orchestrator | P6, P9, P15, queue-ordering, e2e |
-| `app.py` | Streamlit cockpit (no PBT coverage; UX layer) | (visual smoke + signature) |
+| `api.py` | FastAPI backend (no PBT coverage; HTTP layer) | (smoke + signature) |
+| `frontend/src/components/ui/v0-ai-chat.tsx` | Next.js cockpit (no PBT coverage; UX layer) | (visual smoke) |
 | `data/seed_incidents.json` | Synthetic memory seeds | smoke schema check |
 | `data/seed_alerts.json` | Synthetic queue batch | smoke + determinism hook |
 | `scripts/smoke_test.py` | 4 smoke sub-checks | smoke_test self |
@@ -69,7 +70,8 @@ Verify with:    <commands to run>
 - Edit `models.py` `TriageDecision = Literal[...]`
 - Edit `triage.py` (no value list edits — Literal handles set membership; but
   bypass-eligible set in `workflow.py` may need extension)
-- Edit `app.py` `TRIAGE_PILL_CLASS` palette + add CSS class in `inject_css`
+- Edit `frontend/src/components/ui/v0-ai-chat.tsx` `DecisionBadge` palette
+  to cover the new value
 - Re-run: P3, P4, P5, P6, P11, P12 (test_triage.py)
 
 ### Adding a new RouteTrace step in router or workflow
@@ -110,7 +112,7 @@ Verify with:    <commands to run>
 
 | Goal | Command |
 |---|---|
-| Compile only | `cd incident-memory-agent && python -m compileall app.py incident_agent seed_memory.py scripts/smoke_test.py scripts/generate_seed_alerts.py tests` |
+| Compile only | `cd incident-memory-agent && python -m compileall api.py incident_agent seed_memory.py scripts/smoke_test.py scripts/generate_seed_alerts.py tests` |
 | All PBT under CI seed | `cd incident-memory-agent && set OPENRECALL_PBT_SEED=20260101 && set HYPOTHESIS_PROFILE=ci && python -m pytest tests/property -q --hypothesis-profile=ci` |
 | Single property file | `cd incident-memory-agent && python -m pytest tests/property/test_<name>.py -q --hypothesis-profile=ci` |
 | Single property test | `cd incident-memory-agent && python -m pytest tests/property/test_<file>.py::test_<func> -q --hypothesis-profile=ci` |
@@ -122,7 +124,8 @@ Verify with:    <commands to run>
 
 Some proposed changes don't trace to any requirement clause. Examples:
 
-- A new tab in the cockpit (the design contract is **two** tabs, no more).
+- A parallel page component in the Next.js cockpit (the design contract is
+  one cockpit, `v0-ai-chat.tsx`; extend it, do not bypass it).
 - A new memory backend besides Hindsight Cloud + local JSON.
 - Slack/Teams/PagerDuty live ingestion.
 - A new autoscaling rule for the Groq budget.

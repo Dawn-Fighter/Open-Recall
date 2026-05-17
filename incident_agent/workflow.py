@@ -40,7 +40,7 @@ class IncidentWorkflow:
     curve recording, and audit trace assembly. The single-alert
     ``analyze(raw_alert)`` entry point preserves its pre-OpenRecall
     signature; ``analyze_queue`` iterates ``analyze`` so retain visibility
-    from alert N to N+1 is observable in the same Streamlit session.
+    from alert N to N+1 is observable in the same process lifetime.
     """
 
     def __init__(
@@ -241,6 +241,22 @@ class IncidentWorkflow:
 
     def _invalid_alert_result(self, reason: str) -> AnalysisResult:
         placeholder_incident = IncidentObject(error_type="invalid_alert")
+        # Ensure route_trace has at least one entry so len(audit_trace) == len(route_trace)
+        # as required by P15.
+        placeholder_trace = RouteTrace(
+            step="batch validation",
+            model="memory-bypass",
+            route_reason=f"batch entry rejected: {reason}",
+            confidence=0.0,
+            latency_ms=0.0,
+            estimated_cost_usd=0.0,
+            strong_model_baseline_cost_usd=0.0,
+            savings_vs_strong_usd=0.0,
+            escalated=True,
+            cascadeflow_enabled=self.router.cascadeflow_enabled,
+            live_model_call=False,
+            budget_remaining_usd=max(0.0, round(self.router.run_budget, 5)),
+        )
         audit = [
             AuditTraceEntry(
                 step="batch validation",
@@ -271,7 +287,7 @@ class IncidentWorkflow:
             roles={},
             timeline_notes=[],
             postmortem_action_items=[],
-            route_trace=[],
+            route_trace=[model_to_dict(placeholder_trace)],
             hindsight_status=self.memory.status,
             fallback_mode=self.memory.fallback_mode,
             alert_fingerprint=None,

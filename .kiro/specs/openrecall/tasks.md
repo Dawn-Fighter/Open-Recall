@@ -2,9 +2,14 @@
 
 ## Overview
 
-Convert the existing single-incident `incident-memory-agent/` cockpit into the OpenRecall queue-driven alert triage co-pilot in 17 incremental steps. Each top-level task is a coherent shippable unit; sub-tasks are 5–30 minute focused units. Test sub-tasks are marked optional with `*` per spec convention but the property-based test suite (task 14) is core to satisfying R15. Task ordering enforces "earlier unblocks later" so the project remains buildable after every checkpoint.
+Convert the existing single-incident `incident-memory-agent/` project into the OpenRecall queue-driven alert triage co-pilot. The plan is split into two phases:
 
-All paths in this plan are relative to `incident-memory-agent/`. Implementation language is **Python 3.11+** (Pydantic v2, Streamlit, hindsight-client, cascadeflow[groq], Hypothesis) per design.md; no language selection is needed.
+- **Phase 1 (tasks 1–17):** the original implementation under a Streamlit cockpit. All seventeen tasks are complete and the package code, property tests, smoke tests, and seed data continue to satisfy R1–R15.
+- **Phase 2 (task 18, end of file):** the post-launch Streamlit cutover. The Streamlit cockpit (`app.py`, `.streamlit/`) was retired in favor of a FastAPI backend (`api.py`) plus a Next.js 16 cockpit (`frontend/`). The package modules under `incident_agent/` are unchanged; only the entry point, the cockpit, and the docs/steering moved.
+
+Tasks 1–17 are preserved verbatim as the historical implementation record so every R/P trace remains auditable. Where they reference `app.py`, `streamlit run`, or the Altair chart, those references describe the state of the system at the time the task was completed; the current state is documented in Phase 2 and in `design.md` after its post-cutover update.
+
+All paths in this plan are relative to `incident-memory-agent/`. The current implementation language is **Python 3.11+** for the FastAPI backend (FastAPI, Pydantic v2, hindsight-client, cascadeflow[groq], Hypothesis) plus **Node.js 20+** for the Next.js cockpit (next 16, react 19, tailwindcss 4, shadcn 4).
 
 The acronyms used below: P# = correctness Property # from `requirements.md` (also restated in `design.md` § Correctness Properties); R#.# = requirement clause number from `requirements.md`.
 
@@ -159,4 +164,24 @@ The acronyms used below: P# = correctness Property # from `requirements.md` (als
 - Each task references specific requirements (R#.#) and properties (P#) for traceability. All references are cross-checked against `requirements.md` and `design.md`.
 - Checkpoints (12.4, 15.6, 17.6) ensure incremental validation between phases.
 - Property tests validate the universal correctness invariants. Unit/example tests validate signatures and seed data shape. The smoke test exercises the queue end-to-end against the local fallback path so CI never needs a live network.
-- The pre-OpenRecall single-alert path (R1) is preserved exactly: `IncidentWorkflow.analyze(raw_alert)` keeps its signature, every new `AnalysisResult` field has a safe default, and the existing CSS/hero in `app.py` lives inside the new "Single alert" tab.
+- The pre-OpenRecall single-alert path (R1) is preserved exactly: `IncidentWorkflow.analyze(raw_alert)` keeps its signature, every new `AnalysisResult` field has a safe default. Phase 2 below records how the Streamlit cockpit referenced in tasks 13 and 17 was retired without breaking R1.
+
+---
+
+## Phase 2 — Streamlit cutover (post-launch)
+
+The Streamlit cockpit shipped under tasks 13 and 17 was retired in this phase. The cutover preserved every package-level contract (`incident_agent/*.py`, the 15 correctness properties, the backward-compat signature gate, the smoke test) and replaced only the entry point and the analyst-facing UI.
+
+- [x] 18. Streamlit cutover to FastAPI + Next.js
+  - [x] 18.1 Delete the Streamlit runtime: `app.py`, `app.py.streamlit.bak`, `.streamlit/` config dir, `streamlit.log`, and `__pycache__/app.cpython-*.pyc`. (R14.5; supersedes task 13)
+  - [x] 18.2 Update `pyproject.toml` and `requirements.txt`: drop `streamlit` and `altair`; add `fastapi>=0.136.0`, `uvicorn>=0.47.0`. Dev deps remain `hypothesis>=6.108`, `pytest>=8.0`. (R14.4; supersedes task 2.2, 2.3)
+  - [x] 18.3 Replace `Makefile` `run` target with `api` (`uvicorn api:app --reload --port 8000`) and `frontend` (`cd frontend && npm run dev`). Update `compile` to compile `api.py` instead of `app.py`. (R14.2)
+  - [x] 18.4 Update `.gitignore`: drop `.streamlit/secrets.toml`, add `data/decision_cache.json`, `frontend/.next/`, `frontend/node_modules/`, `frontend/out/`. (R12.2; supersedes task 1.2)
+  - [x] 18.5 Drop Streamlit references from `incident_agent/cost_curve.py` and `incident_agent/workflow.py` docstrings: replace `@st.cache_resource` mentions with module-level singleton language and replace "Streamlit session" with "FastAPI process". (R1.2 — backward compat preserved; supersedes task 6.1, 10.1)
+  - [x] 18.6 Add `api.py` at the repo root: FastAPI app with module-level `IncidentMemory`, `CascadeFlowRouter`, `CostCurveTracker`, `IncidentWorkflow` singletons; `lifespan` auto-seeds Hindsight; `CORSMiddleware` open in dev; routes `/health`, `/stats`, `/cost-curve`, `/seed`, `/analyze`, `/retain`. (R13.x — Cockpit + Override flow contract; supersedes task 13)
+  - [x] 18.7 Add `frontend/`: Next.js 16 App Router project with Tailwind v4, shadcn 4, and `frontend/src/components/ui/v0-ai-chat.tsx` as the cockpit. Renders streaming agent steps, decision pill, fingerprint section, prior incidents, dead ends, cost line, audit panel, and the inline override form (which calls `POST /retain`). (R13.1, R13.2, R13.3, R13.5, R13.6; supersedes task 13)
+  - [x] 18.8 Rewrite README, HANDOVER, CONTRIBUTING, SECURITY: replace every `streamlit run app.py` with `uvicorn api:app --reload --port 8000` plus `cd frontend && npm run dev`; replace `.streamlit/secrets.toml` with `data/decision_cache.json` in sensitive-files lists. (R14.5; supersedes task 16.1)
+  - [x] 18.9 Rewrite `docs/ARCHITECTURE.md`: replace the Streamlit cockpit component with the Next.js + FastAPI split; update the four Mermaid diagrams. Rewrite `docs/DEMO.md` as a 60-second runbook over uvicorn + npm run dev. Update `docs/HACKATHON_SUBMISSION.md` UX + Evaluation sections. Rewrite `content/social_post.md` and `content/demo_video_script.md`. (R14.5; supersedes task 16.2, 16.3, 16.4, 16.5)
+  - [x] 18.10 Replace `.kiro/steering/streamlit-cockpit.md` with `.kiro/steering/nextjs-cockpit.md` (fileMatch `frontend/**/*.tsx`, `frontend/**/*.ts`, `api.py`). Update `.kiro/steering/rules.md` (RULE-CODE-07 module-level singleton; RULE-COST-03 references `/cost-curve`; RULE-SEC-02 swaps `.streamlit/secrets.toml` → `data/decision_cache.json`; RULE-TEST-04 references `api.py` + `frontend/`; section 9 renamed to "Next.js cockpit" with RULE-UI-01..06). Update `tech.md`, `structure.md`, `product.md`, `python-conventions.md` for the new stack. Update all `.kiro/skills/*` and `.kiro/hooks/*`. (RULE-KIRO-04)
+  - [x] 18.11 Update `requirements.md`: rename `Streamlit_Cockpit` glossary term → `Cockpit`; replace `app.py` references with `api.py` + `frontend/`; update R12.2 gitignore list and R13 acceptance criteria. Update `design.md`: replace Streamlit_Cockpit and Cost Curve Chart sections with Next.js + `/cost-curve` API description; update mermaid diagrams; update Component Responsibilities Table; replace Streamlit State Model with Cockpit and Backend State Model. (R14.5; supersedes task 16.2)
+  - [x] 18.12 Final verification: `make compile && make pbt && make smoke && python -c "import api; print(len(api.app.routes))"`. Confirm 17 PBTs pass under `OPENRECALL_PBT_SEED=20260101`, signature tests pass, all six FastAPI routes register. (R14.1, R14.3, R14.4)

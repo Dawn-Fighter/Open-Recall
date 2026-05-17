@@ -2,7 +2,7 @@
 
 ## Introduction
 
-OpenRecall is an alert triage co-pilot for SOC analysts and on-call SRE/developers, built on top of the existing `incident-memory-agent/` Streamlit cockpit for the Hindsight x cascadeflow hackathon. OpenRecall reframes the project from a one-incident-at-a-time RCA workspace into a queue-driven triage workflow with **counterfactual memory**: every retained alert carries the analyst's final triage decision (false_positive, duplicate, known_benign, real, escalated) and the dead ends that prior responders already explored.
+OpenRecall is an alert triage co-pilot for SOC analysts and on-call SRE/developers. The hackathon delivery is a FastAPI backend (`api.py`) plus a Next.js 16 cockpit (`frontend/`) layered over the existing `incident-memory-agent/` package code, built for the Hindsight x cascadeflow hackathon. OpenRecall reframes the project from a one-incident-at-a-time RCA workspace into a queue-driven triage workflow with **counterfactual memory**: every retained alert carries the analyst's final triage decision (false_positive, duplicate, known_benign, real, escalated) and the dead ends that prior responders already explored.
 
 Three pillars earn rubric points and constrain every requirement below:
 
@@ -10,9 +10,9 @@ Three pillars earn rubric points and constrain every requirement below:
 2. **Cost curve visibility.** The cockpit renders cost-per-alert dropping over time as memory grows, with an explicit comparison against a strong-model-only baseline.
 3. **Alert DNA fingerprinting.** Alerts are reduced to a structured fingerprint (error_class, service_role, dependency_pattern, signal_shape, attack_pattern, environment) instead of free-text keyword overlap, and Hindsight retrieval keys on that fingerprint.
 
-OpenRecall extends the existing repository (`incident-memory-agent/`) rather than replacing it. All current files (`app.py`, `incident_agent/models.py`, `incident_agent/memory.py`, `incident_agent/router.py`, `incident_agent/workflow.py`, `data/seed_incidents.json`, `data/sample_alerts.json`, `scripts/smoke_test.py`, `.github/workflows/ci.yml`, `Makefile`) remain in place, are extended, and continue to compile and pass the deterministic smoke test in offline mode.
+OpenRecall extends the existing repository (`incident-memory-agent/`) rather than replacing it. All current package modules (`incident_agent/models.py`, `incident_agent/memory.py`, `incident_agent/router.py`, `incident_agent/workflow.py`, `data/seed_incidents.json`, `data/sample_alerts.json`, `scripts/smoke_test.py`, `.github/workflows/ci.yml`, `Makefile`) remain in place, are extended, and continue to compile and pass the deterministic smoke test in offline mode.
 
-The primary memory backend changes from local Hindsight Docker to **Hindsight Cloud** at `https://api.hindsight.vectorize.io`, accessed through the `hindsight-client` SDK. The local JSON fallback is preserved and must produce structurally identical analysis output so judges can demo offline.
+The primary memory backend is **Hindsight Cloud** at `https://api.hindsight.vectorize.io`, accessed through the `hindsight-client` SDK. The local JSON fallback is preserved and must produce structurally identical analysis output so judges can demo offline.
 
 ### Personas Covered
 
@@ -33,7 +33,7 @@ The following are explicitly excluded from this spec:
 
 ## Glossary
 
-- **OpenRecall_System** — The end-to-end Streamlit cockpit plus `incident_agent` package that ingests alerts, fingerprints them, consults memory, proposes triage decisions, escalates when needed, and retains decisions.
+- **OpenRecall_System** — The end-to-end FastAPI backend, Next.js cockpit, and `incident_agent` package that ingests alerts, fingerprints them, consults memory, proposes triage decisions, escalates when needed, and retains decisions.
 - **Alert** — A single incoming triage signal (raw text payload plus optional metadata) representing one SIEM/pager event for Maya or Devon.
 - **AlertFingerprint** — A structured Pydantic v2 record with fields `error_class`, `service_role`, `dependency_pattern`, `signal_shape`, `attack_pattern`, and `environment`, used as the canonical key for memory retrieval.
 - **Fingerprint_Generator** — The component (`incident_agent/fingerprint.py`) that produces an AlertFingerprint from raw alert text using the cheap model first, with a deterministic regex fallback.
@@ -48,8 +48,8 @@ The following are explicitly excluded from this spec:
 - **Workflow_Orchestrator** — The extended `IncidentWorkflow` (`incident_agent/workflow.py`) exposing both `analyze(raw_alert)` (single) and `analyze_queue(alerts)` (batch) entry points.
 - **Cost_Curve_Tracker** — The component that aggregates RouteTrace cost data across an alert batch and exposes a time-ordered series of (alert_index, cost_usd, baseline_cost_usd) tuples for the UI chart.
 - **Audit_Trace_Recorder** — The serializer that produces the visible per-alert decision log (model used, route reason, memory hits, decision proposed, escalation reason, live-call status).
-- **Streamlit_Cockpit** — The extended `app.py` UI that adds a queue/batch view, per-alert auto-triage badges, the cost curve chart, dead_ends capture in the retain flow, and the analyst override flow.
-- **Override_Flow** — The UI affordance that lets an analyst accept the proposed TriageDecision, override it with a different decision, and optionally attach `dead_ends`.
+- **Cockpit** — The analyst-facing UI delivered as a Next.js 16 frontend (`frontend/`) talking to the FastAPI backend (`api.py`). Renders the chat input, streaming agent steps, triage card with fingerprint + decision pill + prior incidents + dead ends, and the inline override flow.
+- **Override_Flow** — The Cockpit affordance that lets an analyst accept the proposed TriageDecision, override it with a different decision, and optionally attach `dead_ends`. Implemented as a `POST /retain` call from the Cockpit.
 - **DeadEnd** — A free-text string captured during retain that records a hypothesis or remediation that was tried and disproven during a prior incident (e.g., "tried restarting DB pods, made it worse").
 - **AnalysisResult** — The existing top-level Pydantic record returned by the workflow, extended for OpenRecall with `alert_fingerprint`, `triage_result`, and `cost_curve_point` fields.
 - **Pretty_Printer** — The function that serializes an AlertFingerprint back into its canonical string form, paired with the parser to support the round-trip property.
@@ -63,26 +63,26 @@ The following are explicitly excluded from this spec:
 
 ### Requirement 1: Single-Alert Ingestion (Backwards Compatibility)
 
-**User Story:** As Devon (on-call SRE), I want to paste a single PagerDuty page into the cockpit and get an analysis back, so that the existing single-alert workflow continues to work after OpenRecall is added.
+**User Story:** As Devon (on-call SRE), I want to paste a single PagerDuty page into the Cockpit and get an analysis back, so that the existing single-alert workflow continues to work after OpenRecall is added.
 
 #### Acceptance Criteria
 
-1. WHEN an analyst submits a single raw alert string through the Streamlit_Cockpit, THE Workflow_Orchestrator SHALL produce an AnalysisResult whose schema is a strict superset of the pre-OpenRecall AnalysisResult.
+1. WHEN an analyst submits a single raw alert string through the Cockpit, THE Workflow_Orchestrator SHALL produce an AnalysisResult whose schema is a strict superset of the pre-OpenRecall AnalysisResult.
 2. THE Workflow_Orchestrator SHALL expose an `analyze(raw_alert: str) -> AnalysisResult` method that preserves the existing call signature.
 3. WHEN the existing `data/sample_alerts.json` fixtures are submitted one at a time, THE OpenRecall_System SHALL produce a non-empty `route_trace`, a non-empty `verification_commands` list, and a populated `incident` field for every fixture.
 4. WHEN a single alert is analyzed, THE Workflow_Orchestrator SHALL populate `alert_fingerprint`, `triage_result`, and `cost_curve_point` on the AnalysisResult.
 
 ### Requirement 2: Batch and Queue Alert Ingestion
 
-**User Story:** As Maya (SOC analyst), I want to upload a batch of alerts at once and watch them stream through triage, so that I can see memory pre-judge the repeats while I focus only on the novel cases.
+**User Story:** As Maya (SOC analyst), I want to submit a batch of alerts at once and watch them stream through triage, so that I can see memory pre-judge the repeats while I focus only on the novel cases.
 
 #### Acceptance Criteria
 
 1. THE Workflow_Orchestrator SHALL expose an `analyze_queue(alerts: list[Alert]) -> list[AnalysisResult]` method that processes alerts in submission order.
-2. WHEN an analyst uploads a batch of alerts through the Streamlit_Cockpit, THE OpenRecall_System SHALL accept either a JSON file conforming to `data/seed_alerts.json` schema or a paste-in JSON array.
-3. WHEN a batch is submitted, THE Streamlit_Cockpit SHALL render one row per alert in queue order, each row showing fingerprint summary, proposed TriageDecision, triage_confidence, escalation reason, and an Override_Flow control.
+2. WHEN an analyst submits a batch of alerts (via a future Cockpit batch UI or via direct invocation of `analyze_queue`), THE OpenRecall_System SHALL accept either a JSON array conforming to `data/seed_alerts.json` schema or a paste-in JSON array.
+3. WHILE a batch is being processed, THE Workflow_Orchestrator SHALL surface, per alert, a result containing fingerprint summary, proposed TriageDecision, triage_confidence, escalation reason, and the data needed for the Override_Flow.
 4. WHILE a batch is being processed, THE Workflow_Orchestrator SHALL make memory written by alert N available to recall calls for alert N+1 within the same batch.
-5. IF the batch input is malformed JSON or an entry is missing the `raw_alert` field, THEN THE OpenRecall_System SHALL display a per-row validation error and continue processing the remaining valid entries.
+5. IF the batch input is malformed JSON or an entry is missing the `raw_alert` field, THEN THE OpenRecall_System SHALL produce a per-row validation error and continue processing the remaining valid entries.
 6. THE OpenRecall_System SHALL ship a synthetic `data/seed_alerts.json` fixture containing approximately 100 alerts spanning repeats, false positives, novel real incidents, and security signals across both personas.
 
 ### Requirement 3: Alert Fingerprint Generation
@@ -145,7 +145,7 @@ The following are explicitly excluded from this spec:
 #### Acceptance Criteria
 
 1. THE Workflow_Orchestrator SHALL include a `dead_ends: list[str]` field on the AnalysisResult, populated from the union of `dead_ends` on all MemoryMatch records returned by recall.
-2. WHEN the Streamlit_Cockpit renders an AnalysisResult, THE Streamlit_Cockpit SHALL display the `dead_ends` list in a dedicated "Skip these paths" panel.
+2. WHEN the Cockpit renders an AnalysisResult, THE Cockpit SHALL display the `dead_ends` list in a dedicated "Skip these paths" section of the triage card.
 3. THE Override_Flow SHALL accept zero or more free-text DeadEnd entries from the analyst at retain time.
 4. WHEN an analyst retains a memory with non-empty `dead_ends`, THE Memory_Adapter SHALL persist them as part of the memory record's metadata.
 5. WHEN recall returns prior memories whose metadata contains `dead_ends`, THE Memory_Adapter SHALL preserve them in the MemoryMatch metadata field for downstream rendering.
@@ -157,7 +157,7 @@ The following are explicitly excluded from this spec:
 #### Acceptance Criteria
 
 1. THE Memory_Adapter SHALL expose `retain(fingerprint: AlertFingerprint, decision: TriageDecision, dead_ends: list[str], analyst_id: str | None, business_impact_minutes: int | None, ...)` that stores the triage outcome.
-2. WHEN an analyst submits a retain action through the Override_Flow, THE Streamlit_Cockpit SHALL pass the chosen TriageDecision, captured DeadEnd list, optional analyst_id, and optional business_impact_minutes to the Memory_Adapter.
+2. WHEN an analyst submits a retain action through the Override_Flow, THE Cockpit SHALL `POST /retain` with the chosen TriageDecision, captured DeadEnd list, and (optionally) analyst_id and business_impact_minutes; the FastAPI backend SHALL invoke `Memory_Adapter.retain(...)` with those values.
 3. WHEN a retain call targets a memory whose `(fingerprint, decision, content)` tuple already exists in the store, THE Memory_Adapter SHALL not create a duplicate record (idempotent retain).
 4. THE Memory_Adapter SHALL return a status string indicating whether the memory was retained in Hindsight Cloud, retained in the Local_Fallback_Store, or skipped as a duplicate.
 5. WHEN retain succeeds in either backend, THE Memory_Adapter SHALL make the new memory visible to the next `recall_by_fingerprint` call within the same process without requiring a restart.
@@ -169,11 +169,11 @@ The following are explicitly excluded from this spec:
 
 #### Acceptance Criteria
 
-1. THE Cost_Curve_Tracker SHALL maintain an in-memory time-ordered series of `(alert_index: int, cost_usd: float, baseline_cost_usd: float)` tuples for every analyzed alert in the current cockpit session.
-2. THE Streamlit_Cockpit SHALL render a chart of OpenRecall cost-per-alert versus strong-model-only baseline cost-per-alert across the analyzed alerts.
-3. THE Streamlit_Cockpit SHALL display a numeric "savings vs strong-model-only" panel showing total cost, total baseline, and percentage saved for the current session.
+1. THE Cost_Curve_Tracker SHALL maintain an in-memory time-ordered series of `(alert_index: int, cost_usd: float, baseline_cost_usd: float)` tuples for every analyzed alert in the current FastAPI process.
+2. THE FastAPI backend SHALL expose `GET /cost-curve` returning the per-alert series as `{points: [{index, cost, baseline}, ...]}` so the Cockpit can render a chart of OpenRecall cost-per-alert versus strong-model-only baseline cost-per-alert across the analyzed alerts.
+3. THE FastAPI backend SHALL expose `GET /stats` returning total cost, total savings, and percentage saved for the current process so the Cockpit can display a numeric "savings vs strong-model-only" panel.
 4. WHEN an alert is analyzed and its TriageResult triggers an LLM-bypass per Requirement 6.1, THE Cost_Curve_Tracker SHALL record `cost_usd=0.0` for that alert while preserving the strong-model baseline_cost_usd.
-5. WHEN multiple batches are processed in sequence within the same cockpit session, THE running mean cost-per-alert SHALL be available as `mean_cost_per_alert(batch_id)` for downstream assertions and the cost chart SHALL reflect the cumulative series.
+5. WHEN multiple batches are processed in sequence within the same process, THE running mean cost-per-alert SHALL be available as `mean_cost_per_alert(batch_id)` for downstream assertions and the cost series SHALL reflect the cumulative ordering.
 
 ### Requirement 10: Audit Trace and Route Visibility
 
@@ -182,7 +182,7 @@ The following are explicitly excluded from this spec:
 #### Acceptance Criteria
 
 1. THE Audit_Trace_Recorder SHALL produce, per alert, a record containing: AlertFingerprint, list of recalled MemoryMatch summaries with scores, TriageResult, every RouteTrace emitted, total cost, baseline cost, savings, and live-call status.
-2. THE Streamlit_Cockpit SHALL render the audit record under each alert row in collapsible form, showing model name, route reason, memory hit count, proposed decision, and escalation reason.
+2. THE Cockpit SHALL render the audit record under each alert card in collapsible form, showing model name, route reason, memory hit count, proposed decision, and escalation reason.
 3. WHEN an LLM bypass occurs, THE Audit_Trace_Recorder SHALL record `llm_skipped=True`, `model="memory-bypass"`, and a route_reason string referencing the matched memory titles.
 4. THE RouteTrace records SHALL preserve the existing fields (`step`, `model`, `route_reason`, `confidence`, `latency_ms`, `estimated_cost_usd`, `strong_model_baseline_cost_usd`, `savings_vs_strong_usd`, `escalated`, `cascadeflow_enabled`, `live_model_call`, `model_error`, `budget_remaining_usd`) and SHALL add `triage_decision_proposed`, `memory_match_score`, `decision_consistency`, and `llm_skipped`.
 
@@ -206,22 +206,24 @@ The following are explicitly excluded from this spec:
 #### Acceptance Criteria
 
 1. THE OpenRecall_System SHALL read every API key (`GROQ_API_KEY`, `HINDSIGHT_API_KEY`) from process environment variables only.
-2. THE repository `.gitignore` SHALL include `.env`, `.streamlit/secrets.toml`, and `data/local_memory.json`.
+2. THE repository `.gitignore` SHALL include `.env`, `data/local_memory.json`, and `data/decision_cache.json`.
 3. THE `.env.example` file SHALL list `HINDSIGHT_BASE_URL`, `HINDSIGHT_API_KEY`, `HINDSIGHT_BANK_ID`, `GROQ_API_KEY`, `CASCADEFLOW_MODE`, `CASCADEFLOW_LIVE_GROQ`, `CASCADEFLOW_RUN_BUDGET_USD`, `CASCADEFLOW_CHEAP_MODEL`, and `CASCADEFLOW_STRONG_MODEL` with placeholder values only and SHALL contain no live keys.
 4. IF a tracked file in the repository contains a string matching `gsk_[A-Za-z0-9_]{20,}` or `hsk_[A-Za-z0-9_]{20,}`, THEN the repository SHALL be considered non-compliant and the value SHALL be moved to `.env` before the spec is considered complete.
-5. WHEN a required environment variable is unset and a code path needs it, THE OpenRecall_System SHALL log a non-fatal warning, fall back to deterministic or fallback behavior per the relevant requirement, and SHALL NOT crash the cockpit.
+5. WHEN a required environment variable is unset and a code path needs it, THE OpenRecall_System SHALL log a non-fatal warning, fall back to deterministic or fallback behavior per the relevant requirement, and SHALL NOT crash the FastAPI process.
+6. THE OpenRecall_System SHALL NOT expose API keys to the Cockpit via `NEXT_PUBLIC_*` env vars or any other client-readable mechanism. All outbound calls from the Cockpit go through the FastAPI backend.
 
-### Requirement 13: Streamlit Cockpit Queue View and Override Flow
+### Requirement 13: Cockpit Triage Card and Override Flow
 
-**User Story:** As Maya, I want a queue UI that shows me at a glance which alerts memory has already pre-judged, so that I can accept-all the obvious false positives and focus on the rest.
+**User Story:** As Maya, I want a triage card UI that shows me at a glance what memory has already pre-judged, so that I can accept obvious false positives and focus on the rest.
 
 #### Acceptance Criteria
 
-1. THE Streamlit_Cockpit SHALL expose a "Queue" view that lists analyzed alerts in submission order with columns for fingerprint summary, proposed TriageDecision badge, triage_confidence, escalation reason, and an Override_Flow control.
-2. WHEN an analyst clicks the Override_Flow control on a queue row, THE Streamlit_Cockpit SHALL render a form that accepts: chosen TriageDecision, optional dead_ends, optional analyst_id, optional business_impact_minutes.
-3. WHEN the analyst submits the Override_Flow, THE Streamlit_Cockpit SHALL invoke `Memory_Adapter.retain(...)` with the chosen values and SHALL refresh the queue row to reflect the persisted decision.
-4. THE Streamlit_Cockpit SHALL render a per-batch summary showing alert count, count auto-decided by memory, count escalated to the strong model, total cost, and total savings vs strong-only.
-5. WHEN no AlertFingerprint matches any prior memory, THE Streamlit_Cockpit SHALL clearly mark the alert "Novel — no prior memory" so the analyst knows to invest the full investigation effort.
+1. THE Cockpit SHALL render, per analyzed alert, a triage card containing: streaming agent steps, fingerprint summary, proposed TriageDecision badge (color-coded by decision class), triage_confidence percentage, escalation reason, prior incidents list, root causes, dead ends, and an Override_Flow control.
+2. WHEN an analyst opens the Override_Flow, THE Cockpit SHALL render a form that accepts: chosen TriageDecision, optional dead_ends, optional analyst_note.
+3. WHEN the analyst submits the Override_Flow, THE Cockpit SHALL `POST /retain` with the chosen values and SHALL refresh the triage card to reflect the persisted decision.
+4. THE Cockpit SHALL render a per-process summary panel (sourced from `GET /stats`) showing alert count, total cost, total savings vs strong-only, and percentage saved.
+5. WHEN no AlertFingerprint matches any prior memory, THE Cockpit SHALL clearly mark the alert "Novel — no prior memory" so the analyst knows to invest the full investigation effort.
+6. THE Cockpit SHALL be implemented as a Next.js 16 App Router application under `frontend/` and SHALL be the only place where end-user UI lives. Do not add a parallel page component for new UI surfaces; extend `frontend/src/components/ui/v0-ai-chat.tsx`.
 
 ### Requirement 14: Repository Hygiene and Existing Targets
 
@@ -229,8 +231,8 @@ The following are explicitly excluded from this spec:
 
 #### Acceptance Criteria
 
-1. THE repository SHALL pass `python -m compileall app.py incident_agent seed_memory.py scripts/smoke_test.py` after OpenRecall is added.
-2. THE existing `make install`, `make run`, and `make smoke` targets SHALL remain functional and SHALL not require live network access for `make smoke`.
+1. THE repository SHALL pass `python -m compileall api.py incident_agent seed_memory.py scripts/smoke_test.py` after OpenRecall is added.
+2. THE existing `make install`, `make api`, `make frontend`, `make pbt`, and `make smoke` targets SHALL remain functional and SHALL not require live network access for `make smoke`.
 3. WHEN `scripts/smoke_test.py` runs in CI with `HINDSIGHT_BASE_URL` pointed at an unreachable host and `CASCADEFLOW_LIVE_GROQ=false`, THE smoke test SHALL exercise the queue/batch entry point, assert at least one auto-triage bypass occurs against seeded memory, and SHALL exit zero.
 4. THE OpenRecall_System SHALL ship a `make pbt` target (or equivalent invocation in CI) that runs the property-based tests defined in Requirement 15 with a deterministic seed.
 5. THE existing `data/seed_incidents.json` and `data/sample_alerts.json` files SHALL remain readable, and any new fields added to seed records SHALL default to safe values for existing consumers.

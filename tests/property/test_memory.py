@@ -103,7 +103,7 @@ def test_fallback_vs_cloud_structural_parity(frozen_router, raw_alert) -> None:
 
     assert isinstance(r_frozen, AnalysisResult)
     assert isinstance(r_local, AnalysisResult)
-    assert set(r_frozen.model_fields.keys()) == set(r_local.model_fields.keys())
+    assert set(type(r_frozen).model_fields.keys()) == set(type(r_local).model_fields.keys())
     # Nested model parity: alert_fingerprint, triage_result, cost_curve_point
     if (
         r_frozen.alert_fingerprint is not None

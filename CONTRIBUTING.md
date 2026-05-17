@@ -12,25 +12,34 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
+
+cd frontend && npm install && cd ..
 ```
 
-Run the app:
+Run the backend:
 
 ```bash
-streamlit run app.py
+uvicorn api:app --reload --port 8000
+```
+
+Run the frontend (in a second shell):
+
+```bash
+cd frontend && npm run dev
 ```
 
 Run checks before opening a pull request:
 
 ```bash
-python -m compileall app.py incident_agent seed_memory.py scripts/smoke_test.py
+python -m compileall api.py incident_agent seed_memory.py scripts/smoke_test.py
+python -m pytest tests/property -q --hypothesis-profile=ci
 python scripts/smoke_test.py
 ```
 
 ## Pull Request Checklist
 
-- Keep `.env`, `.streamlit/secrets.toml`, `data/local_memory.json`, and logs out
-  of git.
+- Keep `.env`, `data/local_memory.json`, `data/decision_cache.json`, and
+  logs out of git.
 - Update `README.md` or `docs/` when behavior, setup, or demo flow changes.
 - Include screenshots for meaningful UI changes.
-- Keep fallback mode working without Hindsight Docker or Groq credentials.
+- Keep fallback mode working without Hindsight Cloud or Groq credentials.

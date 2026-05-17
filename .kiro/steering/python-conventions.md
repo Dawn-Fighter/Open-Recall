@@ -136,7 +136,7 @@ The pre-OpenRecall single-alert path **must** keep working:
 
 Run in order:
 
-1. `python -m compileall app.py incident_agent seed_memory.py scripts/smoke_test.py scripts/generate_seed_alerts.py tests`
+1. `python -m compileall api.py incident_agent seed_memory.py scripts/smoke_test.py scripts/generate_seed_alerts.py tests`
 2. `python -m pytest tests -q --hypothesis-profile=ci`
 3. `python scripts/smoke_test.py`
 

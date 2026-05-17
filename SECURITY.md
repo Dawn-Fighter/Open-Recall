@@ -13,7 +13,7 @@ customer data, request bodies, or account identifiers in public reports.
 
 The repository is a demo implementation. Security fixes should prioritize:
 
-- Secret handling in `.env`, Streamlit settings, and logs.
+- Secret handling in `.env`, the FastAPI process environment, and logs.
 - Hindsight Cloud retain/recall payload safety.
 - Prompt injection resistance for incident text passed to model providers.
 - Clear separation between fallback demo data and real retained incident memory.
@@ -30,10 +30,10 @@ The repository is a demo implementation. Security fixes should prioritize:
   `HINDSIGHT_API_RETAIN_*` variables from local `.env` files. They are harmless
   but unused.
 - When `HINDSIGHT_API_KEY` is unset or the cloud endpoint is unreachable, the
-  cockpit falls back to the deterministic local store
+  backend falls back to the deterministic local store
   (`data/seed_incidents.json` plus `data/local_memory.json`). Treat
-  `data/local_memory.json` as sensitive and do not commit it; the `.gitignore`
-  enforces this.
+  `data/local_memory.json` and `data/decision_cache.json` as sensitive and do
+  not commit them; the `.gitignore` enforces this.
 - Review Hindsight and Groq deployment settings before using this with real
   production incidents.
 

@@ -8,7 +8,8 @@ inclusion: always
 
 OpenRecall is an alert triage co-pilot for SOC analysts and on-call SRE/devs.
 It is the hackathon submission for the **Hindsight x cascadeflow** challenge,
-built on top of the existing `incident-memory-agent/` Streamlit cockpit.
+delivered as a FastAPI backend (`api.py`) plus a Next.js 16 cockpit
+(`frontend/`) over the existing `incident-memory-agent/` package code.
 
 The project converts a one-incident-at-a-time RCA workspace into a queue-driven
 triage workflow with **counterfactual memory**: every retained alert carries
@@ -26,11 +27,13 @@ the analyst's final triage decision (`false_positive | duplicate | known_benign
    `triage_confidence >= 0.85` AND `attack_pattern` is empty, a synthetic
    `model="memory-bypass"` RouteTrace is emitted and zero LLM cost is incurred.
 
-2. **Cost curve visibility.** The cockpit renders a layered Altair chart of
-   per-alert OpenRecall cost vs strong-model-only baseline. The shaded green
+2. **Cost curve visibility.** The cockpit renders per-alert OpenRecall cost
+   vs strong-model-only baseline as a layered chart. The shaded green
    savings band grows as memory accumulates. Bypassed alerts record
    `cost_usd=0.0` while preserving `baseline_cost_usd` so the savings band
-   remains meaningful.
+   remains meaningful. The data is sourced from `GET /cost-curve`; the
+   Next.js cockpit may use any charting library so long as the per-point
+   `{index, cost, baseline}` shape is the source of truth.
 
 3. **Alert DNA fingerprinting.** Each alert is reduced to a structured
    `AlertFingerprint` with six fields (`error_class`, `service_role`,

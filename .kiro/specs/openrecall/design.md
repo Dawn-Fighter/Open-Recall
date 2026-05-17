@@ -2,11 +2,11 @@
 
 ## Overview
 
-OpenRecall converts the existing single-incident `incident-memory-agent/` cockpit into a queue-driven alert triage co-pilot built on three load-bearing ideas: counterfactual memory keyed on a structured Alert DNA fingerprint, an auto-triage engine that bypasses the strong model when memory is consistent, and a live cost curve that proves the cascadeflow value in under sixty seconds of demo time. The design extends every existing module (`app.py`, `incident_agent/*.py`, `data/*.json`, `scripts/smoke_test.py`, `Makefile`, CI) rather than replacing them. The pre-OpenRecall single-alert path keeps working unchanged; new fields on `AnalysisResult` are additive with safe defaults so the historical smoke test, deterministic RCA pipeline, and cockpit hero render the same as before when no new code is invoked.
+OpenRecall converts the existing single-incident `incident-memory-agent/` project into a queue-driven alert triage co-pilot built on three load-bearing ideas: counterfactual memory keyed on a structured Alert DNA fingerprint, an auto-triage engine that bypasses the strong model when memory is consistent, and a live cost curve that proves the cascadeflow value in under sixty seconds of demo time. The design extends every existing module (`incident_agent/*.py`, `data/*.json`, `scripts/smoke_test.py`, `Makefile`, CI) and introduces two new top-level entry points — `api.py` (FastAPI backend) and `frontend/` (Next.js cockpit) — without breaking the pre-OpenRecall single-alert path. New fields on `AnalysisResult` are additive with safe defaults so the historical smoke test, deterministic RCA pipeline, and signature tests pass unchanged when no new code is invoked.
 
-The memory backend shifts from local Hindsight Docker (`http://localhost:8888`) to Hindsight Cloud (`https://api.hindsight.vectorize.io`) using a Bearer-style `HINDSIGHT_API_KEY` header. A deterministic local JSON store (`data/seed_incidents.json` + `data/local_memory.json`) remains the safety net so the demo runs offline. CascadeFlow_Router keeps its existing httpx + cost_estimate + RouteTrace pattern; OpenRecall adds two new step kinds (`alert fingerprint`, `auto-triage bypass`) without touching the live Groq call shape.
+The memory backend uses Hindsight Cloud (`https://api.hindsight.vectorize.io`) with a Bearer-style `HINDSIGHT_API_KEY` header. A deterministic local JSON store (`data/seed_incidents.json` + `data/local_memory.json`) remains the safety net so the demo runs offline. CascadeFlow_Router keeps its existing httpx + cost_estimate + RouteTrace pattern; OpenRecall adds two new step kinds (`alert fingerprint`, `auto-triage bypass`) without touching the live Groq call shape.
 
-The design favors deterministic, auditable behavior over clever inference. Fingerprint generation is cheap-model-first with a regex fallback so demo mode is reproducible without a vector database. The auto-triage decision is a hard threshold (Strong_Match score ≥ 0.85, Decision_Consistency ≥ 0.9, attack_pattern kill switch) instead of a learned weight, so property tests can express the bypass invariant as a single conjunction. Memory bypass emits a synthetic `model="memory-bypass"` RouteTrace so the audit invariant `len(audit_entries) == len(route_trace)` always holds. `analyze_queue` is a sequential loop over `analyze` so retain visibility from alert N to alert N+1 is observable in the same Streamlit session.
+The design favors deterministic, auditable behavior over clever inference. Fingerprint generation is cheap-model-first with a regex fallback so demo mode is reproducible without a vector database. The auto-triage decision is a hard threshold (Strong_Match score ≥ 0.85, Decision_Consistency ≥ 0.9, attack_pattern kill switch) instead of a learned weight, so property tests can express the bypass invariant as a single conjunction. Memory bypass emits a synthetic `model="memory-bypass"` RouteTrace so the audit invariant `len(audit_entries) == len(route_trace)` always holds. `analyze_queue` is a sequential loop over `analyze` so retain visibility from alert N to alert N+1 is observable in the same FastAPI process.
 
 ## Architecture
 
@@ -20,7 +20,8 @@ flowchart LR
     end
 
     subgraph OpenRecall_System
-        Cockpit[Streamlit_Cockpit<br/>app.py]
+        Frontend[Cockpit<br/>frontend/ on :3000]
+        Backend[FastAPI Backend<br/>api.py on :8000]
         Workflow[Workflow_Orchestrator<br/>incident_agent/workflow.py]
     end
 
@@ -28,21 +29,23 @@ flowchart LR
     LocalStore[(Local_Fallback_Store<br/>data/local_memory.json<br/>data/seed_incidents.json)]
     Groq[Groq via cascadeflow<br/>qwen3-32b / gpt-oss-120b]
 
-    Maya -- pastes/uploads alerts --> Cockpit
-    Devon -- pastes single page --> Cockpit
-    Cockpit --> Workflow
+    Maya -- pastes/uploads alerts --> Frontend
+    Devon -- pastes single page --> Frontend
+    Frontend -- fetch /analyze /retain /stats /cost-curve --> Backend
+    Backend --> Workflow
     Workflow -- recall_by_fingerprint / retain --> HindsightCloud
     Workflow -. fallback recall/retain .-> LocalStore
     Workflow -- fingerprint extract / RCA generate --> Groq
-    Workflow -- triage bypass / no LLM --> Cockpit
+    Workflow -- triage bypass / no LLM --> Backend
 ```
 
 ### Component Diagram
 
 ```mermaid
 flowchart TB
-    subgraph UI [Streamlit_Cockpit]
-        QueueView[Queue View]
+    subgraph UI [Cockpit]
+        ChatInput[Chat Input]
+        TriageCard[Triage Card]
         OverrideForm[Override_Flow]
         CostChart[Cost Curve Chart]
         AuditPanel[Audit Trace Panel]
@@ -72,7 +75,7 @@ flowchart TB
         Audit[Audit_Trace_Recorder]
     end
 
-    QueueView --> Workflow
+    ChatInput --> Workflow
     OverrideForm --> Adapter
     Workflow --> FPGen
     FPGen --> Router
@@ -96,7 +99,7 @@ flowchart TB
 sequenceDiagram
     autonumber
     participant U as Analyst
-    participant C as Streamlit_Cockpit
+    participant C as Cockpit (Next.js + FastAPI)
     participant W as Workflow_Orchestrator
     participant FG as Fingerprint_Generator
     participant R as CascadeFlow_Router
@@ -138,7 +141,7 @@ sequenceDiagram
 sequenceDiagram
     autonumber
     participant U as Analyst
-    participant C as Streamlit_Cockpit
+    participant C as Cockpit (Next.js + FastAPI)
     participant W as Workflow_Orchestrator
     participant M as Memory_Adapter
     participant H as Hindsight_Client
@@ -212,7 +215,8 @@ The threshold values `Strong_Match >= 0.85` and `Decision_Consistency >= 0.9` ar
 
 | Component | Module | Responsibility |
 | --- | --- | --- |
-| Streamlit_Cockpit | `app.py` | Render hero, batch upload, queue view, override form, cost curve chart, audit panels, dead_ends panel; preserve existing CSS framework. |
+| Cockpit (frontend) | `frontend/src/components/ui/v0-ai-chat.tsx` | Next.js cockpit. Render chat input, streaming agent steps, triage card with fingerprint badge + decision pill + prior incidents + dead ends + cost line, inline override form, audit panel. |
+| FastAPI Backend | `api.py` | HTTP layer holding the long-lived workflow singletons. Exposes `/health`, `/stats`, `/cost-curve`, `/seed`, `/analyze`, `/retain`. |
 | Workflow_Orchestrator | `incident_agent/workflow.py` | Coordinate fingerprint, recall, triage, optional LLM, retain; expose `analyze` (single) and `analyze_queue` (batch). |
 | Fingerprint_Generator | `incident_agent/fingerprint.py` | Produce AlertFingerprint via cheap-model JSON-mode call with deterministic regex fallback; pretty-print and parse. |
 | Pretty_Printer | `incident_agent/fingerprint.py` (function `format_fingerprint`) | Serialize AlertFingerprint into stable canonical string. |
@@ -224,7 +228,7 @@ The threshold values `Strong_Match >= 0.85` and `Decision_Consistency >= 0.9` ar
 | Audit_Trace_Recorder | `incident_agent/audit.py` | Build per-alert AuditTraceEntry from RouteTrace + MemoryMatch + TriageResult. |
 | Hindsight_Client | `incident_agent/memory.py` (private `_init_hindsight`) | Initialize SDK against `https://api.hindsight.vectorize.io` with Bearer header; health check; graceful failure. |
 | Local_Fallback_Store | `data/seed_incidents.json` + `data/local_memory.json` | Deterministic JSON-backed memory used when Hindsight unreachable; same method shapes as Hindsight path. |
-| Override_Flow | `app.py` (queue row form) | Capture analyst-chosen TriageDecision, dead_ends, analyst_id, business_impact_minutes; call retain. |
+| Override_Flow | Cockpit override form → `POST /retain` | Capture analyst-chosen TriageDecision, dead_ends, analyst_note; submit to FastAPI which calls `Memory_Adapter.retain(...)`. |
 
 ### Key Public Interfaces
 
@@ -286,7 +290,7 @@ class IncidentMemory:
     ) -> str: ...
 ```
 
-The new keyword arguments are all optional; the legacy positional/keyword `(content, context, metadata)` call shape continues to work for `seed()` and for the existing learning-loop button in `app.py`.
+The new keyword arguments are all optional; the legacy positional/keyword `(content, context, metadata)` call shape continues to work for `seed()` and for the `seed_memory.py` CLI.
 
 #### `incident_agent/router.py` (extensions)
 
@@ -493,7 +497,7 @@ The OpenRecall design treats every external failure as recoverable to determinis
 
 **Budget exhaustion.** When `accumulated_live_cost + estimated_cost_for_next_call > run_budget`, `CascadeFlow_Router._call_model` flips to deterministic output (no live call), sets `live_model_call=False`, `budget_exhausted=True`, and `route_reason="run budget exhausted; deterministic fallback"`. The current in-flight call is allowed to complete per the property statement.
 
-**Pydantic validation errors on retain metadata.** Treated as fatal user-facing errors (the override form returns a Streamlit error toast) but not fatal to the workflow — the existing analysis result is preserved on `st.session_state`.
+**Pydantic validation errors on retain metadata.** Treated as fatal user-facing errors (the FastAPI `/retain` endpoint returns a 422 response with the validation message) but not fatal to the workflow — the existing analysis result is preserved in the cockpit's React state.
 
 ## Testing Strategy
 
@@ -586,7 +590,7 @@ The conftest also defines a `frozen_router` fixture that returns a `CascadeFlowR
 - `data/seed_incidents.json` schema check (every record has `triage_decision` and `dead_ends`) — runs in `make smoke`.
 - `.env.example` content check — required keys present, no live keys (regex `gsk_[A-Za-z0-9_]{20,}|hsk_[A-Za-z0-9_]{20,}` must not match).
 
-PBT applies cleanly to OpenRecall because the load-bearing components (fingerprint generation, triage decision, idempotent retain, cost curve aggregation, audit emission) are pure functions or pure-with-explicit-state methods. UI rendering, Streamlit DOM behavior, and live Hindsight/Groq integration are out of PBT scope and rely on snapshot/example tests and the offline smoke test instead.
+PBT applies cleanly to OpenRecall because the load-bearing components (fingerprint generation, triage decision, idempotent retain, cost curve aggregation, audit emission) are pure functions or pure-with-explicit-state methods. UI rendering, React DOM behavior, and live Hindsight/Groq integration are out of PBT scope and rely on snapshot/example tests and the offline smoke test instead.
 
 ## Low-Level Design
 
@@ -622,12 +626,13 @@ All paths are relative to `incident-memory-agent/`.
 | `incident_agent/router.py` | Add `fingerprint_with_trace`, `triage_with_trace`. Add `budget_exhausted` flag carry-through and the four new RouteTrace fields. Track cumulative live cost so `budget_exhausted` can be computed. |
 | `incident_agent/workflow.py` | Wire `FingerprintGenerator`, `TriageEngine`, `CostCurveTracker`, `AuditTraceRecorder`. Implement `analyze_queue`. Keep `analyze` signature intact; populate the new optional `AnalysisResult` fields. |
 | `incident_agent/__init__.py` | Export new public names. |
-| `app.py` | Add Queue tab with batch upload + queue table, Override_Flow form, dead_ends panel, cost curve chart (Altair), audit panel per row. Preserve existing CSS and hero. |
+| `api.py` | New top-level FastAPI module. Holds the long-lived `IncidentMemory`, `CascadeFlowRouter`, `CostCurveTracker`, `IncidentWorkflow` singletons. Exposes `/health`, `/stats`, `/cost-curve`, `/seed`, `/analyze`, `/retain`. CORS open in dev. |
+| `frontend/` | New Next.js 16 App Router project (Tailwind v4 + shadcn). `frontend/src/components/ui/v0-ai-chat.tsx` is the cockpit (chat input, streaming agent steps, triage card with fingerprint badge + decision pill + prior incidents + dead ends + cost line, inline override flow, audit panel). `frontend/src/app/page.tsx` mounts `<Demo />`. |
 | `data/seed_incidents.json` | Add `"triage_decision": "real"` and `"dead_ends": []` to every record. |
 | `.env.example` | Replace local Hindsight Docker block with cloud + new vars. |
-| `pyproject.toml` | Rename `name` from `incident-memory-agent` to `openrecall`. Bump version to `0.2.0`. Keep dependency list, add `[project.optional-dependencies] dev = ["hypothesis>=6.108", "pytest>=8.0", "altair>=5.2"]`. |
-| `requirements.txt` | Add `hypothesis>=6.108`, `pytest>=8.0`, `altair>=5.2`. |
-| `Makefile` | Add `pbt` target: `.venv/bin/python -m pytest tests/property -q`. Extend `compile` to include the new modules. Extend `smoke` to first call `pbt`. |
+| `pyproject.toml` | Rename `name` from `incident-memory-agent` to `openrecall`. Bump version to `0.2.0`. Production deps include `fastapi`, `uvicorn`, `pydantic`, `python-dotenv`, `httpx`, `hindsight-client`, `cascadeflow[groq]`. Dev deps: `hypothesis>=6.108`, `pytest>=8.0`. |
+| `requirements.txt` | Add `fastapi>=0.136.0`, `uvicorn>=0.47.0`, `hypothesis>=6.108`, `pytest>=8.0`. |
+| `Makefile` | Replace the historic `run` target with `api` (uvicorn) and `frontend` (npm run dev) targets. Add `pbt`: `.venv/bin/python -m pytest tests/property -q`. Extend `compile` to include the new modules. Extend `smoke` to first call `pbt`. |
 | `.github/workflows/ci.yml` | Add `python -m pytest tests/property --hypothesis-profile=ci` step before the smoke step. Set `OPENRECALL_PBT_SEED=20260101`. |
 | `README.md` | Reframe top section as "OpenRecall" with the three-pillar pitch, demo flow, and judging rubric mapping; keep the existing setup/run sections. |
 | `docs/ARCHITECTURE.md` | Replace flow with the new Queue-driven flow; embed the four Mermaid diagrams from this design. |
@@ -894,35 +899,46 @@ function _match_dedupe(existing, dedupe_key):
 
 `self._dedupe_index` is an in-process set initialized empty; its purpose is to make `Property 7` hold within a single process for the Hindsight Cloud path (Hindsight's server-side dedupe is not relied on for the property test). Local-fallback dedupe additionally checks the JSON file because `local_memory.json` may persist across processes.
 
-#### Queue UI render loop
+#### Cockpit triage card render (Next.js)
 
+The cockpit (`frontend/src/components/ui/v0-ai-chat.tsx`) renders a
+TriageCard component for each `/analyze` response. The card composes the
+following collapsible `<Section>` panels in order:
+
+```tsx
+<TriageCard data={analyzeResponse}>
+  <DecisionBadge
+    decision={data.decision}                 // "False Positive" | "Escalated" | ...
+    confidence={data.confidence}              // 0..100
+  />
+  <Section title="Fingerprint" icon={<Fingerprint />}>
+    {Object.entries(data.fingerprint).map(([k, v]) => <KV k={k} v={v} />)}
+  </Section>
+  <Section title={`Prior incidents (${data.memory_hit_count})`} icon={<Database />}>
+    {data.prior_incidents.map(p => (
+      <PriorIncident title={p.title} score={p.score} decision={p.decision} />
+    ))}
+  </Section>
+  <Section title="Skip these paths" icon={<Skull />}>
+    {data.dead_ends.map(d => <li>{d}</li>)}
+  </Section>
+  <Section title="Cost" icon={<DollarSign />}>
+    <CostLine cost={data.cost_usd} savings={data.savings_usd} />
+  </Section>
+  <Section title="Audit trace" icon={<Activity />}>
+    {data.audit_trace.map(e => <AuditRow entry={e} />)}
+  </Section>
+  {data.requires_human_approval && (
+    <EscalationBanner reason={data.escalation_reason} />
+  )}
+  <OverrideFlow rawAlert={rawAlert} cachedPayload={data} />
+</TriageCard>
 ```
-for idx, result in enumerate(st.session_state.queue_results):
-    badge_color = badge_color_for(result.triage_result.proposed_decision)
-        # false_positive -> green, duplicate -> blue, known_benign -> teal,
-        # real -> orange, escalated -> red
-    cols = st.columns([3, 2, 2, 1])
-    with cols[0]:
-        st.markdown(fingerprint_badge_html(result.alert_fingerprint, badge_color), unsafe_allow_html=True)
-    with cols[1]:
-        st.markdown(triage_badge_html(result.triage_result), unsafe_allow_html=True)
-        st.progress(result.triage_result.triage_confidence)
-    with cols[2]:
-        if result.dead_ends:
-            with st.expander(f"Skip these paths ({len(result.dead_ends)})"):
-                for d in result.dead_ends:
-                    st.markdown(f"- {d}")
-        else:
-            st.caption("no dead ends recorded")
-    with cols[3]:
-        if st.button("Override", key=f"override_{idx}"):
-            st.session_state.override_drafts[idx] = {"decision": result.triage_result.proposed_decision}
-    if idx in st.session_state.override_drafts:
-        render_override_form(idx, result)
-    with st.expander(f"Audit trace ({len(result.audit_trace)} steps)"):
-        for entry in result.audit_trace:
-            render_audit_row(entry)
-```
+
+`DecisionBadge` is a switch over the literal decision strings — every
+`TriageDecision` Literal value maps to one color/class. `Section` is the
+shared collapsible wrapper already in `v0-ai-chat.tsx`. `OverrideFlow`
+calls `POST /retain` with the chosen decision and any captured dead ends.
 
 #### Decision_Consistency algorithm
 
@@ -940,37 +956,35 @@ function decision_consistency(strong_matches):
     return (dominant, consistency, n_dominant)
 ```
 
-### Streamlit State Model
+### Cockpit and Backend State Model
 
-| `st.session_state` key | Type | Purpose |
-| --- | --- | --- |
-| `queue_results` | `list[AnalysisResult]` | Results of the most recent batch in submission order. |
-| `batch_id` | `int` | Monotonically incremented when a new batch is submitted; passed to `CostCurveTracker.begin_batch`. |
-| `override_drafts` | `dict[int, dict]` | Keyed by `alert_index` within the current queue; holds in-progress override form values. |
-| `result` | `AnalysisResult` | Existing single-alert result; preserved for backward compatibility. |
-| `memory_fallback` | `bool` | Existing flag; preserved. |
-| `cost_tracker` | `CostCurveTracker` | Cached resource bound to the cockpit session. |
+The cockpit (Next.js) holds only ephemeral UI state in component-local
+React state hooks (chat input, current alert, current triage card,
+in-progress override draft). All domain state lives in the FastAPI
+process and is reconstructed on each request from the workflow singletons.
+
+| Owner | Key | Type | Purpose |
+| --- | --- | --- | --- |
+| Cockpit (React) | `messages` | `Message[]` | Conversation history for the current session: user alerts and agent triage responses. |
+| Cockpit (React) | `currentAlert` | `string` | Raw alert text being submitted. |
+| Cockpit (React) | `triageCard` | `TriageData \| null` | The most recent `/analyze` response. |
+| Cockpit (React) | `overrideDraft` | `OverrideDraft \| null` | In-progress override-form values. |
+| FastAPI (module-level) | `mem` | `IncidentMemory` | Long-lived memory adapter (Hindsight Cloud + local fallback). |
+| FastAPI (module-level) | `rt` | `CascadeFlowRouter` | Long-lived router (Groq + cumulative live cost). |
+| FastAPI (module-level) | `tracker` | `CostCurveTracker` | Long-lived cost-curve tracker, lifetime = process lifetime. |
+| FastAPI (module-level) | `workflow` | `IncidentWorkflow` | Long-lived workflow orchestrator wired to the three above. |
+| FastAPI (module-level) | `_alert_cache` | `dict[str, dict]` | Optional alert-hash decision cache persisted to `data/decision_cache.json`. |
 
 ### Cost Curve Chart
 
-OpenRecall uses `st.altair_chart` rather than `st.line_chart`. Rationale: the chart compares two series (OpenRecall cost and strong-model-only baseline) with a shaded savings region between them, and Altair supports the layered area + line chart in a single declaration. `st.line_chart` would require two separate calls and cannot easily render the shaded savings band. The Altair spec is:
-
-```python
-chart = (
-    alt.Chart(df)
-    .transform_fold(["cost_usd", "baseline_cost_usd"], as_=["series", "value"])
-    .mark_line()
-    .encode(x="alert_index:Q", y="value:Q", color="series:N")
-)
-band = (
-    alt.Chart(df)
-    .mark_area(opacity=0.18, color="#15803d")
-    .encode(x="alert_index:Q", y="cost_usd:Q", y2="baseline_cost_usd:Q")
-)
-st.altair_chart(band + chart, use_container_width=True)
-```
-
-`altair>=5.2` is added to `requirements.txt`.
+The cost curve is sourced from `GET /cost-curve`, which returns
+`{points: [{index, cost, baseline}, ...]}`. The Next.js cockpit MAY
+render this data with any chart library, so long as the per-point
+shape is treated as the source of truth. The recommended visual is a
+layered chart with two line series (`cost`, `baseline`) plus a shaded
+area between them representing the savings band. No Python charting
+dependency is required — the `incident_agent/` package emits the data
+points only.
 
 ### Synthetic seed_alerts.json Generator Design
 
@@ -1007,12 +1021,12 @@ Each existing record gets two new fields appended:
 
 - `IncidentWorkflow.analyze(raw_alert: str) -> AnalysisResult` keeps its exact signature and continues to work without any new arguments.
 - All new fields on `AnalysisResult` (`alert_fingerprint`, `triage_result`, `cost_curve_point`, `dead_ends`, `audit_trace`) have safe defaults (`None`, `[]`) so any caller that does not opt into them sees the same behavior as before.
-- New fields on `RouteTrace` (`triage_decision_proposed`, `memory_match_score`, `decision_consistency`, `llm_skipped`, `budget_exhausted`) all default to `None`/`False` and do not break `app.py`'s existing audit table renderer (every column it reads still exists with the same name).
+- New fields on `RouteTrace` (`triage_decision_proposed`, `memory_match_score`, `decision_consistency`, `llm_skipped`, `budget_exhausted`) all default to `None`/`False`, so any consumer that reads only the legacy RouteTrace fields continues to work.
 - The legacy `IncidentMemory.recall(query, limit)` method stays untouched; `recall_by_fingerprint` is additive. The legacy `retain(content, context, metadata)` positional shape still works because the new arguments are keyword-only.
 - `data/seed_incidents.json` keeps every existing key; new keys default safely.
 - `scripts/smoke_test.py` keeps its existing assertions and gains new ones (queue, bypass, dead_ends).
-- `Makefile` keeps `install`, `run`, `seed`, `smoke`, `compile`; the new `pbt` target is additive.
-- The pre-OpenRecall hero copy and CSS in `app.py` are preserved; the new Queue tab is added alongside the existing single-alert layout via `st.tabs(["Single alert", "Queue"])` so the historic flow is the first tab and runs identically.
+- `Makefile` keeps `install`, `seed`, `compile`, and `smoke`; `pbt` is additive; `api` and `frontend` replace the historic `run` target.
+- The signature tests (`tests/test_signatures.py`) remain the primary backward-compat gate; they pass unchanged after the FastAPI/Next.js cockpit cutover because they exercise only the package surface (`IncidentWorkflow.analyze`, `IncidentMemory.recall`, `IncidentMemory.retain`).
 
 ## Engineering Decision Rationale
 
@@ -1026,13 +1040,11 @@ A soft weight (e.g. weighted vote where each match contributes `score * agreemen
 
 ### 3. TriageDecision as `Literal` rather than `Enum`
 
-The existing `IncidentType` is a `Literal["SRE", "Security", "Hybrid"]` in the same `models.py`. Using `Literal` for `TriageDecision` matches the project's existing convention, serializes to JSON as a plain string (no `.value` accessor needed), works directly with Hypothesis `sampled_from`, and avoids importing `enum` solely for this one type. Streamlit's selectboxes accept the literal strings directly. The JSON files in `data/` can carry the bare strings in `triage_decision` without a special encoder.
+The existing `IncidentType` is a `Literal["SRE", "Security", "Hybrid"]` in the same `models.py`. Using `Literal` for `TriageDecision` matches the project's existing convention, serializes to JSON as a plain string (no `.value` accessor needed), works directly with Hypothesis `sampled_from`, and avoids importing `enum` solely for this one type. The Next.js cockpit consumes the literal strings directly from the `/analyze` payload. The JSON files in `data/` can carry the bare strings in `triage_decision` without a special encoder.
 
 ### 4. Memory bypass produces a synthetic RouteTrace with `model="memory-bypass"`
 
-The audit-completeness invariant Property 15 requires `len(audit_trace) == len(route_trace)` for every analyzed alert. If a bypassed alert produced no RouteTrace for the LLM step we skipped, the cockpit would silently render a fingerprint-only audit, judges would see "1 step" instead of "2 steps including the bypass decision", and the cost curve would have no row to subtract a baseline from. By emitting `step="auto-triage bypass"`, `model="memory-bypass"`, `cost_usd=0.0`, `baseline_cost_usd=estimate_cost(rca_prompt, strong_model)`, the bypass becomes a first-class entry: the savings field actively shows what we did not spend.
-
-### 5. `analyze_queue` as a sequential loop over `analyze`
+The audit-completeness invariant Property 15 requires `len(audit_trace) == len(route_trace)` for every analyzed alert. If a bypassed alert produced no RouteTrace for the LLM step we skipped, the cockpit would silently render a fingerprint-only audit, judges would see "1 step" instead of "2 steps including the bypass decision", and the cost curve would have no row to subtract a baseline from. By emitting `step="auto-triage bypass"`, `model="memory-bypass"`, `cost_usd=0.0`, `baseline_cost_usd=estimate_cost(rca_prompt, strong_model)`, the bypass becomes a first-class entry: the savings field actively shows what we did not spend.### 5. `analyze_queue` as a sequential loop over `analyze`
 
 A parallel or async implementation would speed up batch processing, but it would break two important behaviors. First, retain visibility from alert N to alert N+1 within the same batch (Requirement 2.4) requires deterministic ordering. Second, the cost curve chart needs to render in submission order so the visual "drop" reads correctly to a judge. A sequential loop also keeps the implementation tiny (a `for` loop with index threading into `CostCurveTracker`) and makes Property 14 (budget enforcement) trivially testable. Hackathon scope and demo readability win over throughput.
 

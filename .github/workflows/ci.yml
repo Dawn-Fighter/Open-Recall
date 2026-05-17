@@ -21,8 +21,51 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Guard against Streamlit re-introduction
+        # The cockpit was migrated from Streamlit to FastAPI + Next.js. Fail
+        # CI loudly if anything reintroduces a streamlit dependency or import,
+        # the .streamlit/ config dir, or the legacy app.py entry point.
+        # A grep match in tracked source (excluding the historical task log
+        # and Hypothesis @st.composite usages) is a hard fail.
+        run: |
+          set -e
+          echo '--- forbidden file paths ---'
+          for p in app.py app.py.streamlit.bak streamlit.log .streamlit; do
+            if [ -e "$p" ]; then
+              echo "FAIL: $p exists"
+              exit 1
+            fi
+          done
+          echo '--- forbidden references in tracked source ---'
+          # Allow .kiro/specs/openrecall/tasks.md (historical task list),
+          # tests/property/conftest.py (where st is hypothesis.strategies, not Streamlit),
+          # and this CI workflow file (which carries the literal grep patterns).
+          BAD=$(git ls-files \
+            | grep -v '^.kiro/specs/openrecall/tasks.md$' \
+            | grep -v '^tests/property/conftest.py$' \
+            | grep -v '^.github/workflows/ci.yml$' \
+            | xargs grep -l -E 'streamlit|Streamlit|@st\.cache_|inject_css|st\.session_state' 2>/dev/null || true)
+          if [ -n "$BAD" ]; then
+            echo "FAIL: streamlit references in tracked source:"
+            echo "$BAD"
+            exit 1
+          fi
+          echo '--- forbidden deps in pyproject + requirements ---'
+          if grep -q -i 'streamlit\|altair' pyproject.toml requirements.txt; then
+            echo 'FAIL: streamlit/altair dep found'
+            exit 1
+          fi
+          echo 'OK no streamlit residue'
+
       - name: Compile Python
-        run: python -m compileall app.py incident_agent seed_memory.py scripts/smoke_test.py scripts/generate_seed_alerts.py tests
+        run: python -m compileall api.py incident_agent seed_memory.py scripts/smoke_test.py scripts/generate_seed_alerts.py tests
+
+      - name: Verify FastAPI app imports cleanly
+        env:
+          CASCADEFLOW_LIVE_GROQ: "false"
+          HINDSIGHT_BASE_URL: "http://127.0.0.1:9"
+        run: |
+          python -c "import api; routes=[r.path for r in api.app.routes if hasattr(r,'path')]; expected={'/health','/stats','/cost-curve','/seed','/analyze','/retain'}; missing=expected-set(routes); assert not missing, f'missing routes: {missing}'; print('OK all 6 routes registered')"
 
       - name: Run property-based tests
         env:
@@ -43,3 +86,28 @@ jobs:
           CASCADEFLOW_LIVE_GROQ: "false"
           HINDSIGHT_BASE_URL: "http://127.0.0.1:9"
         run: python scripts/smoke_test.py
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Build Next.js production bundle
+        working-directory: frontend
+        run: npm run build

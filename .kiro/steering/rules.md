@@ -74,9 +74,12 @@ rule references an idiom or anti-pattern, the source is
 - **RULE-CODE-06 (MUST).** `format_fingerprint` is imported **inside**
   `IncidentMemory` method bodies, not at module top, to avoid the
   fingerprint↔memory cycle. Preserve this pattern.
-- **RULE-CODE-07 (MUST).** Streamlit adapters (`IncidentMemory`,
-  `CascadeFlowRouter`, `CostCurveTracker`) are wrapped in
-  `@st.cache_resource`. Static data files load via `@st.cache_data`.
+- **RULE-CODE-07 (MUST).** Long-lived adapters (`IncidentMemory`,
+  `CascadeFlowRouter`, `CostCurveTracker`, `IncidentWorkflow`) are
+  constructed exactly once as module-level singletons in `api.py`. The
+  FastAPI process holds them for its lifetime. **MUST NOT** instantiate
+  them per-request, and **MUST NOT** introduce a parallel cache layer
+  that bypasses `IncidentWorkflow.analyze`.
 - **RULE-CODE-08 (SHOULD).** Public methods on `incident_agent/*.py`
   carry full type annotations on parameters and return types.
 - **RULE-CODE-09 (MUST).** Follow the import order specified in
@@ -133,8 +136,11 @@ rule references an idiom or anti-pattern, the source is
 - **RULE-COST-02 (MUST).** Cumulative cost is monotonic non-decreasing
   (`P8`). The savings band `baseline_cumulative - actual_cumulative` is
   monotonic non-decreasing (`P14`).
-- **RULE-COST-03 (MUST).** Altair chart uses the layered framework in
-  `app.py`. Do not introduce a second charting library.
+- **RULE-COST-03 (MUST).** Cost-curve series is exposed via
+  `GET /cost-curve` from `api.py`. The Next.js cockpit MAY render it with
+  any chart library, but the per-point `{index, cost, baseline}` shape
+  is the single source of truth. Do not introduce a parallel cost-tracking
+  data path.
 
 ## 6. Security and secrets — `RULE-SEC-*`
 
@@ -142,7 +148,7 @@ rule references an idiom or anti-pattern, the source is
   variables only. **MUST NOT** be hard-coded, logged, or echoed back in
   responses (`R12.1`).
 - **RULE-SEC-02 (MUST).** `.gitignore` must include `.env`,
-  `.streamlit/secrets.toml`, and `data/local_memory.json` (`R12.2`).
+  `data/local_memory.json`, and `data/decision_cache.json` (`R12.2`).
 - **RULE-SEC-03 (MUST).** `.env.example` carries placeholder values only.
   A live key in `.env.example` is a P0 incident — fix immediately
   (`R12.3`).
@@ -169,7 +175,8 @@ rule references an idiom or anti-pattern, the source is
   `<noun>_strategy` and live in `tests/property/conftest.py`.
 - **RULE-TEST-04 (MUST).** After any code change, run
   `make compile && make pbt` before declaring done. For changes touching
-  the Streamlit cockpit, also run `make smoke`.
+  `api.py` or `frontend/`, also run `make smoke` and verify the FastAPI
+  process imports cleanly.
 - **RULE-TEST-05 (SHOULD).** When fixing a bug, add or extend a property
   test that would have caught it. Cite the property ID in the test
   docstring.
@@ -195,17 +202,26 @@ rule references an idiom or anti-pattern, the source is
 - **RULE-GIT-06 (MUST).** Only commit when the user explicitly asks. If
   intent is unclear, ask first.
 
-## 9. Streamlit cockpit — `RULE-UI-*`
+## 9. Next.js cockpit — `RULE-UI-*`
 
-- **RULE-UI-01 (MUST).** `inject_css()` is the styling framework. **MUST
-  NOT** replace it; extend it.
-- **RULE-UI-02 (MUST).** Badge palette in `app.py` covers every
+- **RULE-UI-01 (MUST).** `frontend/src/components/ui/v0-ai-chat.tsx` is
+  the cockpit. Extend it; **MUST NOT** introduce parallel page
+  components for new UI surfaces.
+- **RULE-UI-02 (MUST).** The `DecisionBadge` palette covers every
   `TriageDecision` Literal value. Adding a decision value without
-  updating the palette is incomplete.
-- **RULE-UI-03 (MUST).** Two tabs: Single Alert and Queue. Do not add a
-  third tab without a spec edit.
-- **RULE-UI-04 (MUST).** Escalation reason renders directly on the queue
-  row (`R2.3`, `R13.1`).
+  updating the badge palette is incomplete.
+- **RULE-UI-03 (MUST).** Every triage-card subsection uses the
+  `Section` collapsible wrapper (already in `v0-ai-chat.tsx`). Do not
+  bypass it for new sections.
+- **RULE-UI-04 (MUST).** Escalation reason and `requires_human_approval`
+  flag render directly on the triage card, not behind a separate click
+  (`R13.1`).
+- **RULE-UI-05 (MUST).** All outbound calls go through the FastAPI
+  backend. **MUST NOT** call Hindsight Cloud or Groq directly from the
+  cockpit. **MUST NOT** put API keys in `NEXT_PUBLIC_*` env vars.
+- **RULE-UI-06 (MUST).** New triage-card data must be backed by a field
+  in the `/analyze` payload, not derived client-side. Update the API
+  and the cockpit in the same change.
 
 ## 10. Response discipline — `RULE-RESP-*`
 

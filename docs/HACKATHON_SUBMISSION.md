@@ -52,17 +52,19 @@ Cloud, and bypasses the strong model entirely when memory is consistent.
 
 ### User Experience (15%)
 
-- Two-tab cockpit: **Single alert** (the original RCA flow) and **Queue**
-  (the new batch triage flow).
-- Per-row triage decision pills color-coded by decision class
-  (`false_positive` green, `duplicate` blue, `known_benign` teal,
-  `real` orange, `escalated` red, plus a `Novel` purple pill for
-  no-prior-memory).
-- Inline override flow with decision, dead ends, analyst ID, business
-  impact minutes — all written to the same retain path.
-- Per-row audit trace expander rendering each `AuditTraceEntry` with
-  model, route reason, decision, escalation reason, cost, baseline,
-  savings, and live-call status.
+- Two-process cockpit: **FastAPI backend** (`api.py`) holds the
+  workflow singletons; **Next.js 16 frontend** (`frontend/`) renders
+  the analyst UI with shadcn + Tailwind.
+- Triage card with color-coded decision pills (`false_positive` green,
+  `duplicate` / `known_benign` green, `escalated` red, `real` amber)
+  plus per-section collapsible panels for fingerprint, prior incidents,
+  root causes, dead ends, verification commands, and remediation.
+- Inline override flow that calls `POST /retain` with decision, dead
+  ends, and an optional analyst note — closing the learning loop in one
+  click.
+- Streaming agent step trace rendered as the workflow progresses, so the
+  operator sees normalize → fingerprint → memory query → routing →
+  triage in the order they happen.
 
 ### Real-world Impact (10%)
 
@@ -77,16 +79,18 @@ Cloud, and bypasses the strong model entirely when memory is consistent.
 
 ## Suggested Evaluation Path
 
-1. Run the Streamlit app with the live env vars (Hindsight Cloud +
-   Live Groq).
-2. Queue tab → `Use packaged seed alerts (100)` → `Analyze queue`.
-3. Inspect the cost curve, the per-batch summary, and a few queue rows.
-4. Override one escalated row to `false_positive` with a dead end.
-5. Re-run `Analyze queue`. Confirm the same fingerprint family now
-   bypasses (audit trace shows `model: memory-bypass`).
-6. Single alert tab → `Security: WAF SQL injection`. Confirm the
-   security-novel kill switch in the audit trace.
-7. Run the Hypothesis suite: `python -m pytest tests/property -q`.
+1. Start the backend with the live env vars: `uvicorn api:app --reload --port 8000`.
+2. Sanity check: `curl http://127.0.0.1:8000/health` should return
+   `hindsight_connected: true` and `groq_live: true`.
+3. Start the frontend: `cd frontend && npm run dev`.
+4. Open `http://localhost:3000` and submit a fresh alert. Inspect the
+   triage card.
+5. Override an escalated row to `false_positive` with a dead end.
+6. Re-submit the same alert. Confirm cost drops to `$0.00` and the
+   agent step trace shows the memory bypass.
+7. Submit a security-flavoured alert. Confirm the security-novel kill
+   switch fires (`requires_human_approval=true`).
+8. Run the Hypothesis suite: `python -m pytest tests/property -q --hypothesis-profile=ci`.
 
 ## Production Extensions (Out of Scope)
 

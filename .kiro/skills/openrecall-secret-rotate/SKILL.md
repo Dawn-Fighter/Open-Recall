@@ -104,21 +104,29 @@ python -c "import httpx; r = httpx.head('https://api.hindsight.vectorize.io', ti
 A `200`, `401`, or `403` means the host is up; the connection works. A
 `5xx` or connection timeout means something else is wrong.
 
-## Step 5 — Verify the cockpit picks up the new keys
+## Step 5 — Verify the FastAPI backend picks up the new keys
 
 ```bash
 cd incident-memory-agent
-streamlit run app.py
+uvicorn api:app --reload --port 8000
 ```
 
-Top-right badges should show:
+In a second terminal:
 
-- `Hindsight connected` (green) — confirms Hindsight key is valid.
-- `Live model calls` (only if `CASCADEFLOW_LIVE_GROQ=true` in `.env` and
-  Groq key is valid).
+```bash
+curl -s http://127.0.0.1:8000/health | jq
+```
 
-Click `Analyze incident` on any sample. The audit trace should show real
-non-zero `latency_ms` and `cost_usd` values for the live LLM calls.
+Confirm:
+
+- `hindsight_connected: true` — confirms Hindsight key is valid.
+- `groq_live: true` — confirms `CASCADEFLOW_LIVE_GROQ=true` and the Groq
+  key is valid.
+
+Submit any sample alert via `curl -X POST http://127.0.0.1:8000/analyze \
+  -H 'Content-Type: application/json' -d '{"alert":"checkout-service crashloop after deploy"}'`.
+The response audit trace should show real non-zero `latency_ms` and
+`cost_usd` values for the live LLM calls.
 
 ## Step 6 — Optional: scrub from git history
 

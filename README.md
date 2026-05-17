@@ -30,26 +30,44 @@ The project is built to demo well without fragile dependencies: it runs in a
 deterministic offline mode by default, then upgrades to live Hindsight Cloud
 and Groq calls when those services are configured.
 
+## Architecture
+
+OpenRecall is split into two processes:
+
+- **FastAPI backend** (`api.py`) — exposes `/health`, `/stats`,
+  `/cost-curve`, `/seed`, `/analyze`, `/retain`. Holds the
+  `IncidentMemory`, `CascadeFlowRouter`, `CostCurveTracker`, and
+  `IncidentWorkflow` singletons.
+- **Next.js cockpit** (`frontend/`) — the analyst-facing UI. Submits raw
+  alerts to `/analyze`, renders the triage card with fingerprint, decision
+  pill, prior incidents, root causes, dead ends, and cost. Calls `/retain`
+  on the override flow.
+
+```text
+Browser ──▶ Next.js (3000) ──fetch──▶ FastAPI (8000) ──▶ incident_agent/* ──▶ Hindsight Cloud + Groq
+```
+
 ## Features
 
-- Single-alert RCA cockpit (preserved from the original "Single alert" tab).
-- Queue tab for batch triage: drop in 100 alerts, watch the cost curve drop.
+- Single-alert RCA (paste a raw page, get the full RCA + audit trace).
+- Counterfactual memory: every retained alert stores triage decision + dead ends.
 - AlertFingerprint extraction (cheap-model JSON with regex fallback).
 - Fingerprint-keyed Hindsight Cloud recall + idempotent retain.
-- Counterfactual memory: every retained alert stores triage decision + dead ends.
 - TriageEngine with hard thresholds (Strong_Match ≥ 0.85, consistency ≥ 0.9)
   and a security-novel kill switch.
 - CascadeFlow router with cumulative live-cost tracking, per-batch budget
   enforcement, and a synthetic memory-bypass RouteTrace for full audit
   completeness.
-- Altair cost-curve chart with shaded savings band against the
-  strong-model-only baseline.
-- Per-row override flow: accept the proposed decision or override it,
+- Cost curve series exposed via `/cost-curve` (cumulative cost vs
+  strong-model-only baseline).
+- Per-alert override flow: accept the proposed decision or override it,
   attach dead ends, retain to Hindsight (with local JSON fallback).
 - Hypothesis-based property test suite covering 15 correctness properties.
 - Deterministic offline mode for CI and demo recordings without credentials.
 
 ## Quick Start
+
+### 1. Backend (FastAPI)
 
 ```bash
 python -m venv .venv
@@ -60,19 +78,30 @@ source .venv/bin/activate
 
 pip install -r requirements.txt
 cp .env.example .env  # then edit .env with your keys
-streamlit run app.py
+
+uvicorn api:app --reload --port 8000
 ```
 
-Open the Streamlit URL printed by the command. The cockpit shows two tabs:
+The API is now live at `http://127.0.0.1:8000`. Visit `/docs` for the
+auto-generated Swagger UI, or `/health` for a quick connectivity probe.
 
-- **Single alert** — paste a raw page or pick a sample, get the full RCA + audit trace.
-- **Queue** — upload a JSON array of alerts, click `Use packaged seed alerts (100)`,
-  or paste in your own. Watch the cost curve drop as memory accumulates.
+### 2. Frontend (Next.js)
 
-If `HINDSIGHT_API_KEY` is unset or Hindsight Cloud is unreachable, the app
-falls back to the deterministic local memory store (`data/seed_incidents.json`
-+ `data/local_memory.json`). Badges at the top of the cockpit make the mode
-visible.
+In a second terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000`. The cockpit talks to the FastAPI backend on
+`localhost:8000` (CORS is wide open in dev).
+
+If `HINDSIGHT_API_KEY` is unset or Hindsight Cloud is unreachable, the
+backend falls back to the deterministic local memory store
+(`data/seed_incidents.json` + `data/local_memory.json`). The `/health`
+endpoint reports the live mode.
 
 ## Live Hindsight Cloud Demo
 
@@ -84,13 +113,13 @@ export HINDSIGHT_API_KEY=hsk_your_key_here
 export HINDSIGHT_BANK_ID=openrecall
 export GROQ_API_KEY=gsk_your_key_here
 export CASCADEFLOW_LIVE_GROQ=true
-streamlit run app.py
+uvicorn api:app --reload --port 8000
 ```
 
-The top badges should show `Hindsight connected` and `Live model calls`. If
-they show `Fallback memory` or `Deterministic model output`, the workflow
-still runs (and produces the same audit trace + cost curve), but does not
-prove the live integration.
+`GET /health` should return `"hindsight_connected": true` and
+`"groq_live": true`. If they return `false`, the workflow still runs (and
+produces the same audit trace + cost curve), but does not prove the live
+integration.
 
 Seed memories into Hindsight Cloud:
 
@@ -98,7 +127,7 @@ Seed memories into Hindsight Cloud:
 python seed_memory.py --limit 5 --delay 0
 ```
 
-Or use the **Seed 5 memories into Hindsight** button in the cockpit sidebar.
+Or call `POST /seed` against the running API.
 
 ## Configuration
 
@@ -121,39 +150,32 @@ OpenRecall reads every API key from environment variables only. Copy
 | `OPENRECALL_PBT_SEED` | `20260101` | `tests/property/conftest.py` | Hypothesis CI deterministic seed. |
 | `OPENRECALL_BATCH_SIZE_LIMIT` | `200` | `IncidentWorkflow.analyze_queue` | Cap on batch size for queue processing. |
 
-## Architecture
+## API Surface
 
-```text
-Raw alert
-  -> generate AlertFingerprint (cheap model JSON or regex fallback)
-  -> recall_by_fingerprint() against Hindsight Cloud (or local fallback)
-  -> TriageEngine.triage(fingerprint, matches)
-       -> propose decision + confidence + escalation reason
-       -> security-novel kill switch when attack_pattern non-empty
-  -> if memory consistent AND confidence >= 0.85 AND attack_pattern empty:
-       -> emit synthetic memory-bypass RouteTrace, skip the LLM entirely
-     else:
-       -> rca_with_trace() with dead_ends from matched memories in the prompt
-  -> record CostCurvePoint (cost vs strong-model baseline)
-  -> build AuditTraceEntry list (one entry per RouteTrace, per P15)
-  -> retain final triage decision + dead ends after analyst override
-```
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | Liveness + Hindsight/Groq mode flags. |
+| `GET` | `/stats` | Cumulative cost, savings, percent-saved, alert count. |
+| `GET` | `/cost-curve` | Per-alert points: `{index, cost, baseline}`. |
+| `POST` | `/seed` | Push `data/seed_incidents.json` into Hindsight. |
+| `POST` | `/analyze` | Body `{alert: str}`. Runs the full workflow and returns the triage card payload. |
+| `POST` | `/retain` | Body `{raw_alert, service, decision, dead_ends, ...}`. Closes the learning loop. |
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component diagrams and
-the full design.
+Schema details available at `http://127.0.0.1:8000/docs` once the API is
+running.
 
 ## Demo Flow
 
-1. Run `streamlit run app.py`.
-2. **Queue tab → click `Use packaged seed alerts (100)`** → click `Analyze queue`.
-3. Watch the cost curve render and the queue table populate. Note how many
-   alerts have memory consulted vs how many escalate.
-4. Pick one row with `proposed_decision = escalated` and click `Override`.
-   Set the decision to `false_positive`, add a dead end, click `Save & retain`.
-5. Re-run `Analyze queue`. The same fingerprint family is now memory-consistent;
-   watch the cost curve flatten near zero for those repeats.
-6. Switch to the **Single alert** tab and pick `Security: WAF SQL injection`.
-   The badges and audit trace show the security-novel kill switch in action.
+1. Start the API: `make api` (or `uvicorn api:app --reload --port 8000`).
+2. Start the frontend: `make frontend` (or `cd frontend && npm run dev`).
+3. Paste a raw alert into the cockpit, watch the agent trace and triage
+   card render.
+4. Pick an alert that returns `Escalated`. Click the override flow, set
+   the decision to `false_positive`, add a dead end, save & retain.
+5. Re-submit the same alert. The triage card should now show the cached
+   decision and zero cost.
+6. Try a security alert (e.g. WAF SQL injection). Confirm the
+   security-novel kill switch fires (`requires_human_approval=true`).
 
 See [docs/DEMO.md](docs/DEMO.md) for the full presenter runbook.
 
@@ -170,8 +192,8 @@ make smoke    # deterministic offline smoke + queue smoke + .env.example schema
 Or directly with pytest:
 
 ```bash
-python -m pytest tests -q                                  # 21 tests
-python -m pytest tests/property --hypothesis-profile=ci -q # 17 PBT under CI seed
+python -m pytest tests -q                                  # signature + integration
+python -m pytest tests/property --hypothesis-profile=ci -q # 17 PBTs under CI seed
 python scripts/smoke_test.py
 ```
 
@@ -182,29 +204,30 @@ so failing examples reproduce. The smoke test runs in offline mode against
 ## Repository Layout
 
 ```text
-app.py                          Streamlit cockpit (Single alert + Queue tabs)
+api.py                           FastAPI backend (the only Python entry point)
+frontend/                        Next.js cockpit (App Router, Tailwind, shadcn)
 incident_agent/
-  models.py                     Pydantic v2 data models
-  fingerprint.py                AlertFingerprint generator + canonical (de)serializer
-  triage.py                     TriageEngine + threshold constants
-  memory.py                     IncidentMemory (Hindsight Cloud + local JSON fallback)
-  router.py                     CascadeFlowRouter + cumulative live-cost tracking
-  cost_curve.py                 CostCurveTracker (in-memory series)
-  audit.py                      AuditTraceRecorder
-  workflow.py                   IncidentWorkflow.analyze + analyze_queue
+  models.py                      Pydantic v2 data models
+  fingerprint.py                 AlertFingerprint generator + canonical (de)serializer
+  triage.py                      TriageEngine + threshold constants
+  memory.py                      IncidentMemory (Hindsight Cloud + local JSON fallback)
+  router.py                      CascadeFlowRouter + cumulative live-cost tracking
+  cost_curve.py                  CostCurveTracker (in-memory series)
+  audit.py                       AuditTraceRecorder
+  workflow.py                    IncidentWorkflow.analyze + analyze_queue
 data/
-  sample_alerts.json            Original 6 demo alerts (single-alert tab)
-  seed_alerts.json              100 synthetic alerts (queue demo)
-  seed_incidents.json           18 synthetic incident memories with triage_decision + dead_ends
-  local_memory.json             Local-fallback retained memories (gitignored at runtime)
+  sample_alerts.json             6 demo alerts
+  seed_alerts.json               100 synthetic alerts (queue demo)
+  seed_incidents.json            18 synthetic incident memories with triage_decision + dead_ends
+  local_memory.json              Local-fallback retained memories (gitignored)
 scripts/
-  smoke_test.py                 Deterministic offline smoke (single + queue + schema + env)
-  generate_seed_alerts.py       Deterministic generator for data/seed_alerts.json
+  smoke_test.py                  Deterministic offline smoke (single + queue + schema + env)
+  generate_seed_alerts.py        Deterministic generator for data/seed_alerts.json
 tests/
-  test_signatures.py            Backward-compat signature checks
-  property/                     Hypothesis property tests (15 correctness properties)
-docs/                           Architecture, demo, hackathon submission notes
-content/                        Article, social post, video script (hackathon deliverables)
+  test_signatures.py             Backward-compat signature checks
+  property/                      Hypothesis property tests (15 correctness properties)
+docs/                            Architecture, demo, hackathon submission notes
+content/                         Article, social post, video script (hackathon deliverables)
 ```
 
 ## Why This Is Useful
