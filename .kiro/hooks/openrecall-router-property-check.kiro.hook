@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "name": "OpenRecall: re-verify router contract on router.py edit",
+  "description": "Asks the agent to walk through the router contract (memory-bypass synthetic trace, budget enforcement, force-strong-model rule, RouteTrace field completeness) whenever incident_agent/router.py is edited.",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "incident-memory-agent/incident_agent/router.py"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "incident_agent/router.py was just edited. Walk through these contracts without restating the file content:\n\n1. Does `triage_with_trace` still emit a RouteTrace with `model=\"memory-bypass\"`, `llm_skipped=True`, `live_model_call=False`, `estimated_cost_usd=0.0`, and a non-zero `strong_model_baseline_cost_usd`? (P6, P15, R10.3)\n2. Does `rca_with_trace` still accept `force_strong_model: bool = False` keyword and use the strong model when it is True regardless of the cheap/strong heuristic? (R6.2, R6.3 — added in the audit fix)\n3. Does `_call_model` still:\n   - increment `_cum_live_cost` only on a successful live call?\n   - flip `_budget_exhausted=True` when `_cum_live_cost + estimated_cost_for_next_call > self.run_budget`?\n   - skip the live HTTP call once `_budget_exhausted` is True, emit `live_model_call=False`, `budget_exhausted=True`, and use `route_reason=\"run budget exhausted; deterministic fallback\"`? (R6.6, P14)\n4. Does every RouteTrace populate `step`, `model`, `route_reason`, `confidence`, `latency_ms`, `estimated_cost_usd`, `strong_model_baseline_cost_usd`, `savings_vs_strong_usd`, `live_model_call`, `cascadeflow_enabled`? (R10.4)\n5. Does `fingerprint_with_trace` still use `step=\"alert fingerprint\"` and `model=self.cheap_model`? (R3.5)\n6. Run `cd incident-memory-agent && python -m pytest tests/property/test_cost_curve.py tests/property/test_triage.py tests/property/test_workflow.py -q --hypothesis-profile=ci` and report the result.\n\nIf any answer is \"no\" or \"unsure\", stop and tell the user what regressed."
+  }
+}

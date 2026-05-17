@@ -5,10 +5,15 @@ import os
 from html import escape
 from pathlib import Path
 
+import altair as alt
+import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
+from incident_agent.cost_curve import CostCurveTracker
+from incident_agent.fingerprint import format_fingerprint
 from incident_agent.memory import IncidentMemory
+from incident_agent.models import Alert, AuditTraceEntry
 from incident_agent.router import CascadeFlowRouter
 from incident_agent.workflow import IncidentWorkflow
 
@@ -32,6 +37,11 @@ def memory() -> IncidentMemory:
 @st.cache_resource
 def router() -> CascadeFlowRouter:
     return CascadeFlowRouter()
+
+
+@st.cache_resource
+def cost_tracker() -> CostCurveTracker:
+    return CostCurveTracker()
 
 
 def inject_css() -> None:
@@ -199,6 +209,26 @@ def inject_css() -> None:
         .pill.high { color: var(--danger); border-color: #fecaca; background: var(--danger-soft); }
         .pill.medium { color: var(--warn); border-color: #fde68a; background: var(--warn-soft); }
         .pill.low { color: var(--ok); border-color: #bbf7d0; background: var(--ok-soft); }
+        /* OpenRecall triage decision pills */
+        .pill.fp { color: #15803d; border-color: #bbf7d0; background: #dcfce7; }
+        .pill.dup { color: #1d4ed8; border-color: #bfdbfe; background: #dbeafe; }
+        .pill.kb { color: #0e7490; border-color: #a5f3fc; background: #cffafe; }
+        .pill.real { color: #b45309; border-color: #fde68a; background: #fef3c7; }
+        .pill.esc { color: #b91c1c; border-color: #fecaca; background: #fee2e2; }
+        .pill.novel { color: #6d28d9; border-color: #ddd6fe; background: #ede9fe; }
+        .fingerprint-mono {
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+            font-size: .78rem;
+            color: var(--muted);
+            background: var(--panel-soft);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 4px 8px;
+            display: inline-block;
+            overflow-wrap: anywhere;
+            margin-bottom: 6px;
+        }
+        .alert-excerpt { color: var(--text); font-size: .88rem; line-height: 1.4; margin-top: 4px; }
 
         .list { margin: 0; padding-left: 1.1rem; color: var(--text); }
         .list li { margin-bottom: 7px; }
@@ -402,16 +432,303 @@ def trace_table(rows: list[dict[str, str | bool | float]]) -> str:
     return f'<div class="trace-scroll"><table class="trace-table"><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
 
 
-st.set_page_config(page_title="Incident Memory Agent", layout="wide", page_icon="IM")
+# OpenRecall queue helpers ---------------------------------------------------
+
+TRIAGE_PILL_CLASS = {
+    "false_positive": "fp",
+    "duplicate": "dup",
+    "known_benign": "kb",
+    "real": "real",
+    "escalated": "esc",
+}
+
+TRIAGE_DECISION_OPTIONS = [
+    "false_positive",
+    "duplicate",
+    "known_benign",
+    "real",
+    "escalated",
+]
+
+
+def triage_pill_html(decision: str) -> str:
+    cls = TRIAGE_PILL_CLASS.get(decision, "")
+    return f'<span class="pill {cls}">{escape(decision)}</span>'
+
+
+def is_novel(result) -> bool:
+    """Return True when there is no Strong_Match and the engine escalated for that reason."""
+    triage = result.triage_result
+    if triage is None:
+        return False
+    if triage.proposed_decision != "escalated":
+        return False
+    if triage.consistent_decision_count != 0:
+        return False
+    return "no Strong_Match" in (triage.escalation_reason or "")
+
+
+def _render_audit_entry(entry: AuditTraceEntry) -> str:
+    return (
+        f"Step: {entry.step}\n"
+        f"Model: {entry.model} | live: {entry.live_model_call} | skipped: {entry.llm_skipped}\n"
+        f"Route reason: {entry.route_reason}\n"
+        f"Decision: {entry.proposed_decision} | escalation reason: {entry.escalation_reason}\n"
+        f"Cost: {money(entry.cost_usd)} | baseline: {money(entry.baseline_cost_usd)} "
+        f"| savings: {money(entry.savings_usd)}\n"
+        f"Memory hits: {entry.memory_hit_count}"
+    )
+
+
+def render_override_form(idx: int, result) -> None:
+    """Render the analyst Override_Flow form for queue row ``idx``."""
+    triage = result.triage_result
+    proposed = triage.proposed_decision if triage else "escalated"
+    try:
+        default_index = TRIAGE_DECISION_OPTIONS.index(proposed)
+    except ValueError:
+        default_index = TRIAGE_DECISION_OPTIONS.index("escalated")
+
+    with st.form(f"override_form_{idx}"):
+        st.markdown("**Override decision**")
+        decision = st.selectbox(
+            "Decision",
+            options=TRIAGE_DECISION_OPTIONS,
+            index=default_index,
+        )
+        dead_ends_text = st.text_area("Dead ends (one per line)", value="")
+        analyst_id = st.text_input("Analyst id", value="")
+        business_impact_minutes = st.number_input(
+            "Business impact (minutes)",
+            min_value=0,
+            value=0,
+            step=1,
+        )
+        cols = st.columns([1, 1])
+        with cols[0]:
+            submitted = st.form_submit_button("Save & retain", type="primary")
+        with cols[1]:
+            cancel = st.form_submit_button("Cancel")
+
+    if cancel:
+        st.session_state.override_drafts.pop(idx, None)
+        st.rerun()
+        return
+
+    if not submitted:
+        return
+
+    dead_ends_list = [
+        line.strip() for line in dead_ends_text.split("\n") if line.strip()
+    ]
+    fp = result.alert_fingerprint
+    fp_canonical = format_fingerprint(fp) if fp is not None else "unknown fingerprint"
+    content = (
+        f"Triage decision for {result.incident.service}: {decision}.\n"
+        f"Alert fingerprint: {fp_canonical}\n"
+        f"Raw alert: {result.incident.raw_alert}\n"
+        f"Dead ends:\n" + "\n".join(f"- {d}" for d in dead_ends_list)
+    )
+    status = mem.retain(
+        content,
+        fingerprint=fp,
+        decision=decision,
+        dead_ends=dead_ends_list,
+        analyst_id=analyst_id or None,
+        business_impact_minutes=(
+            int(business_impact_minutes) if business_impact_minutes > 0 else None
+        ),
+    )
+    st.success(f"Retained: {status}")
+    st.session_state.override_drafts.pop(idx, None)
+    # Re-run the workflow for this row so the persisted decision becomes visible.
+    st.session_state.queue_results[idx] = workflow.analyze(result.incident.raw_alert)
+    st.rerun()
+
+
+def render_queue_row(idx: int, result) -> None:
+    """Render one queue table row inside a bordered container."""
+    with st.container(border=True):
+        cols = st.columns([3, 2, 2, 1])
+
+        with cols[0]:
+            fp = result.alert_fingerprint
+            fp_text = format_fingerprint(fp) if fp is not None else "fingerprint unavailable"
+            raw_excerpt = (result.incident.raw_alert or "")[:90]
+            if result.incident.raw_alert and len(result.incident.raw_alert) > 90:
+                raw_excerpt += "…"
+            st.markdown(
+                f'<div class="fingerprint-mono">{escape(fp_text)}</div>'
+                f'<div class="alert-excerpt">{escape(raw_excerpt)}</div>',
+                unsafe_allow_html=True,
+            )
+
+        with cols[1]:
+            triage = result.triage_result
+            if triage is not None:
+                pill = triage_pill_html(triage.proposed_decision)
+                novel_pill = (
+                    '<span class="pill novel">Novel — no prior memory</span>'
+                    if is_novel(result)
+                    else ""
+                )
+                reason_text = triage.escalation_reason or ""
+                reason_html = (
+                    f'<div class="muted" style="font-size:.74rem;margin-top:6px;'
+                    f"line-height:1.35;\">reason: {escape(reason_text)}</div>"
+                    if reason_text
+                    else ""
+                )
+                st.markdown(
+                    f'<div>{pill} {novel_pill}</div>'
+                    f'<div class="muted" style="font-size:.78rem;margin-top:6px;">'
+                    f"confidence {triage.triage_confidence:.3f}</div>"
+                    f"{reason_html}",
+                    unsafe_allow_html=True,
+                )
+                st.progress(min(max(triage.triage_confidence, 0.0), 1.0))
+            else:
+                st.caption("no triage result")
+
+        with cols[2]:
+            if result.dead_ends:
+                with st.expander(f"Skip these paths ({len(result.dead_ends)})"):
+                    for d in result.dead_ends:
+                        st.markdown(f"- {d}")
+            else:
+                st.caption("no dead ends recorded")
+
+        with cols[3]:
+            if st.button("Override", key=f"override_btn_{idx}"):
+                st.session_state.override_drafts[idx] = {
+                    "decision": (
+                        result.triage_result.proposed_decision
+                        if result.triage_result
+                        else "escalated"
+                    )
+                }
+                st.rerun()
+
+        if idx in st.session_state.override_drafts:
+            render_override_form(idx, result)
+
+        with st.expander(f"Audit trace ({len(result.audit_trace)} steps)"):
+            if not result.audit_trace:
+                st.caption("no audit entries")
+            for entry in result.audit_trace:
+                st.code(_render_audit_entry(entry), language="text")
+
+
+def queue_summary_html(results: list, tracker: CostCurveTracker) -> str:
+    auto = sum(
+        1
+        for r in results
+        if r.triage_result
+        and r.triage_result.proposed_decision
+        in {"false_positive", "duplicate", "known_benign"}
+        and r.triage_result.requires_human_approval
+    )
+    escalated = sum(
+        1
+        for r in results
+        if r.triage_result and r.triage_result.proposed_decision == "escalated"
+    )
+    total_cost, total_baseline, pct_saved = tracker.savings()
+    savings_value = max(0.0, total_baseline - total_cost)
+    return f"""
+    <div class="metric-grid">
+      <div class="metric-card"><div class="metric-label">Alerts</div><div class="metric-value">{len(results)}</div></div>
+      <div class="metric-card"><div class="metric-label">Auto-decided by memory</div><div class="metric-value">{auto}</div></div>
+      <div class="metric-card"><div class="metric-label">Escalated to strong model</div><div class="metric-value">{escalated}</div></div>
+      <div class="metric-card"><div class="metric-label">Total cost</div><div class="metric-value">{escape(money(total_cost))}</div></div>
+      <div class="metric-card"><div class="metric-label">Total baseline</div><div class="metric-value">{escape(money(total_baseline))}</div></div>
+      <div class="metric-card"><div class="metric-label">Total savings</div><div class="metric-value">{escape(money(savings_value))}</div></div>
+      <div class="metric-card"><div class="metric-label">Percent saved</div><div class="metric-value">{pct_saved:.1f}%</div></div>
+    </div>
+    """
+
+
+def render_cost_curve_chart(tracker: CostCurveTracker) -> None:
+    points = tracker.series()
+    if len(points) < 2:
+        return
+    df = pd.DataFrame([p.model_dump() for p in points])
+    chart = (
+        alt.Chart(df)
+        .transform_fold(
+            ["cost_usd", "baseline_cost_usd"], as_=["series", "value"]
+        )
+        .mark_line()
+        .encode(
+            x=alt.X("alert_index:Q", title="Alert index"),
+            y=alt.Y("value:Q", title="USD per alert"),
+            color=alt.Color(
+                "series:N",
+                scale=alt.Scale(
+                    domain=["cost_usd", "baseline_cost_usd"],
+                    range=["#0369a1", "#b91c1c"],
+                ),
+            ),
+        )
+    )
+    band = (
+        alt.Chart(df)
+        .mark_area(opacity=0.18, color="#15803d")
+        .encode(
+            x=alt.X("alert_index:Q"),
+            y=alt.Y("cost_usd:Q"),
+            y2=alt.Y2("baseline_cost_usd:Q"),
+        )
+    )
+    st.altair_chart(band + chart, use_container_width=True)
+
+
+def collect_all_dead_ends(results: list) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for r in results:
+        for d in r.dead_ends:
+            text = str(d).strip()
+            if text and text not in seen:
+                seen.add(text)
+                deduped.append(text)
+    return deduped
+
+
+def parse_alerts_payload(payload: list) -> list[Alert]:
+    if not isinstance(payload, list):
+        raise ValueError("expected a JSON array of alerts")
+    alerts: list[Alert] = []
+    for entry in payload:
+        if not isinstance(entry, dict):
+            raise ValueError("each alert must be a JSON object")
+        raw = str(entry.get("raw_alert") or "")
+        title = entry.get("title")
+        alerts.append(Alert(raw_alert=raw, title=str(title) if title else None))
+    return alerts
+
+
+# Streamlit page setup -------------------------------------------------------
+
+st.set_page_config(page_title="OpenRecall", layout="wide", page_icon="OR")
 inject_css()
 
 mem = memory()
 rt = router()
-workflow = IncidentWorkflow(mem, rt)
+tracker = cost_tracker()
+workflow = IncidentWorkflow(mem, rt, tracker)
 samples = load_samples()
 
+# Session-state init for queue tab
+if "queue_results" not in st.session_state:
+    st.session_state.queue_results = []
+if "override_drafts" not in st.session_state:
+    st.session_state.override_drafts = {}
+if "batch_id" not in st.session_state:
+    st.session_state.batch_id = 0
+
 with st.sidebar:
-    st.markdown("## Intake")
+    st.markdown("## Single-alert intake")
     sample_title = st.selectbox("Sample alert", [s["title"] for s in samples])
     selected = next(s for s in samples if s["title"] == sample_title)
     raw_alert = str(st.text_area("Raw signal", value=selected["raw_alert"], height=260))
@@ -445,150 +762,256 @@ savings_pct = round((savings / baseline_cost) * 100, 1) if baseline_cost else 0.
 memory_badge = "warn" if result.fallback_mode else "ok"
 memory_label = "Fallback memory" if result.fallback_mode else "Hindsight connected"
 escalation_label = "Escalated route" if top_trace.escalated else "Standard route"
-live_label = "Live model calls" if any(t.live_model_call for t in result.route_trace) else "Deterministic model output"
+live_label = (
+    "Live model calls"
+    if any(t.live_model_call for t in result.route_trace)
+    else "Deterministic model output"
+)
 
 if "retain_message" in st.session_state:
     st.success(st.session_state.pop("retain_message"))
 
-st.markdown(
-    f"""
-    <div class="hero">
-      <div class="hero-top">
-        <div>
-          <div class="eyebrow">Incident Memory Agent</div>
-          <h1>Production incident cockpit</h1>
-          <div class="subtitle">Triage operational signals, recall prior incidents, generate verification-first runbooks, and retain final lessons for the next response.</div>
+tab_single, tab_queue = st.tabs(["Single alert", "Queue"])
+
+with tab_single:
+    st.markdown(
+        f"""
+        <div class="hero">
+          <div class="hero-top">
+            <div>
+              <div class="eyebrow">OpenRecall</div>
+              <h1>Alert triage co-pilot</h1>
+              <div class="subtitle">Queue alerts, fingerprint them as alert DNA, recall prior triage decisions, and bypass the strong model when memory is consistent. Cost-aware. Counterfactual. Auditable.</div>
+            </div>
+            <div class="badge-row">
+              <span class="badge {memory_badge}">{escape(memory_label)}</span>
+              <span class="badge info">{escape(escalation_label)}</span>
+              <span class="badge">{escape(live_label)}</span>
+              <span class="badge">{escape(top_trace.model)}</span>
+            </div>
+          </div>
+          <div class="metric-grid">
+            <div class="metric-card"><div class="metric-label">Service</div><div class="metric-value">{escape(result.incident.service)}</div></div>
+            <div class="metric-card"><div class="metric-label">Environment</div><div class="metric-value">{escape(result.incident.environment)}</div></div>
+            <div class="metric-card"><div class="metric-label">Severity</div><div class="metric-value">{escape(result.incident.severity)}</div></div>
+            <div class="metric-card"><div class="metric-label">Classification</div><div class="metric-value">{escape(result.incident_type)}</div></div>
+            <div class="metric-card"><div class="metric-label">Memory hits</div><div class="metric-value">{len(result.memory_matches)}</div></div>
+            <div class="metric-card"><div class="metric-label">Run cost</div><div class="metric-value">{escape(money(total_cost))}</div></div>
+            <div class="metric-card"><div class="metric-label">Saved vs strong-only</div><div class="metric-value">{escape(money(savings))} / {savings_pct}%</div></div>
+          </div>
         </div>
-        <div class="badge-row">
-          <span class="badge {memory_badge}">{escape(memory_label)}</span>
-          <span class="badge info">{escape(escalation_label)}</span>
-          <span class="badge">{escape(live_label)}</span>
-          <span class="badge">{escape(top_trace.model)}</span>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    role_items = [
+        f"{role.replace('_', ' ').title()}: {duty}" for role, duty in result.roles.items()
+    ]
+    cause_blocks = ""
+    for cause in result.likely_root_causes:
+        confidence = escape(str(cause.get("confidence", "n/a")))
+        cause_blocks += (
+            f'<p class="hypothesis">{escape(str(cause.get("cause", "unknown")))} '
+            f'<span class="pill medium">confidence {confidence}</span></p>'
+            f'<p class="evidence">{escape(str(cause.get("evidence", "Evidence pending")))}</p>'
+        )
+
+    dashboard_html = f"""
+    <div class="dashboard-grid">
+      <div class="stack">
+        <div class="panel">
+          {header_html("RCA and runbook", "Evidence-backed hypothesis with verification first")}
+          {cause_blocks}
+          <pre><code>{escape(chr(10).join(result.verification_commands))}</code></pre>
+        </div>
+        <div class="split-grid">
+          <div class="panel">
+            {header_html("Evidence to preserve", "Collect context before changing state")}
+            {html_list(result.evidence_to_preserve)}
+          </div>
+          <div class="panel">
+            {header_html("Containment notes", "Lowest-impact reversible actions")}
+            {html_list(result.containment_notes)}
+          </div>
+          <div class="panel">
+            {header_html("Remediation plan", "Suggested next actions after confirmation")}
+            {html_list(result.remediation_suggestions)}
+          </div>
+          <div class="panel">
+            {header_html("Postmortem actions", "Follow-up items to prevent recurrence")}
+            {html_list(result.postmortem_action_items)}
+          </div>
+        </div>
+        <div class="panel">
+          {header_html("Audit trace", "Routing, cost, latency, and model decisions")}
+          {trace_table(trace_rows(result))}
         </div>
       </div>
-      <div class="metric-grid">
-        <div class="metric-card"><div class="metric-label">Service</div><div class="metric-value">{escape(result.incident.service)}</div></div>
-        <div class="metric-card"><div class="metric-label">Environment</div><div class="metric-value">{escape(result.incident.environment)}</div></div>
-        <div class="metric-card"><div class="metric-label">Severity</div><div class="metric-value">{escape(result.incident.severity)}</div></div>
-        <div class="metric-card"><div class="metric-label">Classification</div><div class="metric-value">{escape(result.incident_type)}</div></div>
-        <div class="metric-card"><div class="metric-label">Memory hits</div><div class="metric-value">{len(result.memory_matches)}</div></div>
-        <div class="metric-card"><div class="metric-label">Run cost</div><div class="metric-value">{escape(money(total_cost))}</div></div>
-        <div class="metric-card"><div class="metric-label">Saved vs strong-only</div><div class="metric-value">{escape(money(savings))} / {savings_pct}%</div></div>
+      <div class="stack">
+        <div class="panel">
+          {header_html("Incident brief", "Normalized signal and operational impact")}
+          <div class="kv">
+            <div class="kv-key">Error type</div><div class="kv-value">{escape(result.incident.error_type)}</div>
+            <div class="kv-key">Dependency</div><div class="kv-value">{escape(result.incident.affected_dependency or "not detected")}</div>
+            <div class="kv-key">Recent change</div><div class="kv-value">{escape(result.incident.suspected_recent_change or "not detected")}</div>
+            <div class="kv-key">Security</div><div class="kv-value"><span class="pill {confidence_class(result.incident.security_relevance)}">{escape(result.incident.security_relevance)}</span></div>
+          </div>
+          <br>
+          <div class="callout">{escape(result.impact_level)}</div>
+          <p class="muted"><b>Blast radius:</b> {escape(result.blast_radius_guess)}</p>
+        </div>
+        <div class="panel">
+          {header_html("Memory recall", "Closest Hindsight incidents and reusable lessons")}
+          {html_memory_matches(result.memory_matches)}
+          <div class="callout">{escape(result.memory_reflection)}</div>
+        </div>
+        <div class="panel">
+          {header_html("Operating model", "Roles and decision checkpoints")}
+          <b>Response roles</b>
+          {html_list(role_items)}
+          <b>Timeline</b>
+          {html_list(result.timeline_notes)}
+        </div>
       </div>
     </div>
-    """,
-    unsafe_allow_html=True,
-)
+    """
+    st.markdown(dashboard_html, unsafe_allow_html=True)
 
-role_items = [
-    f"{role.replace('_', ' ').title()}: {duty}" for role, duty in result.roles.items()
-]
-cause_blocks = ""
-for cause in result.likely_root_causes:
-    confidence = escape(str(cause.get("confidence", "n/a")))
-    cause_blocks += (
-        f'<p class="hypothesis">{escape(str(cause.get("cause", "unknown")))} '
-        f'<span class="pill medium">confidence {confidence}</span></p>'
-        f'<p class="evidence">{escape(str(cause.get("evidence", "Evidence pending")))}</p>'
-    )
-
-dashboard_html = f"""
-<div class="dashboard-grid">
-  <div class="stack">
-    <div class="panel">
-      {header_html("RCA and runbook", "Evidence-backed hypothesis with verification first")}
-      {cause_blocks}
-      <pre><code>{escape(chr(10).join(result.verification_commands))}</code></pre>
-    </div>
-    <div class="split-grid">
-      <div class="panel">
-        {header_html("Evidence to preserve", "Collect context before changing state")}
-        {html_list(result.evidence_to_preserve)}
-      </div>
-      <div class="panel">
-        {header_html("Containment notes", "Lowest-impact reversible actions")}
-        {html_list(result.containment_notes)}
-      </div>
-      <div class="panel">
-        {header_html("Remediation plan", "Suggested next actions after confirmation")}
-        {html_list(result.remediation_suggestions)}
-      </div>
-      <div class="panel">
-        {header_html("Postmortem actions", "Follow-up items to prevent recurrence")}
-        {html_list(result.postmortem_action_items)}
-      </div>
-    </div>
-    <div class="panel">
-      {header_html("Audit trace", "Routing, cost, latency, and model decisions")}
-      {trace_table(trace_rows(result))}
-    </div>
-  </div>
-  <div class="stack">
-    <div class="panel">
-      {header_html("Incident brief", "Normalized signal and operational impact")}
-      <div class="kv">
-        <div class="kv-key">Error type</div><div class="kv-value">{escape(result.incident.error_type)}</div>
-        <div class="kv-key">Dependency</div><div class="kv-value">{escape(result.incident.affected_dependency or "not detected")}</div>
-        <div class="kv-key">Recent change</div><div class="kv-value">{escape(result.incident.suspected_recent_change or "not detected")}</div>
-        <div class="kv-key">Security</div><div class="kv-value"><span class="pill {confidence_class(result.incident.security_relevance)}">{escape(result.incident.security_relevance)}</span></div>
-      </div>
-      <br>
-      <div class="callout">{escape(result.impact_level)}</div>
-      <p class="muted"><b>Blast radius:</b> {escape(result.blast_radius_guess)}</p>
-    </div>
-    <div class="panel">
-      {header_html("Memory recall", "Closest Hindsight incidents and reusable lessons")}
-      {html_memory_matches(result.memory_matches)}
-      <div class="callout">{escape(result.memory_reflection)}</div>
-    </div>
-    <div class="panel">
-      {header_html("Operating model", "Roles and decision checkpoints")}
-      <b>Response roles</b>
-      {html_list(role_items)}
-      <b>Timeline</b>
-      {html_list(result.timeline_notes)}
-    </div>
-  </div>
-</div>
-"""
-st.markdown(dashboard_html, unsafe_allow_html=True)
-
-with st.container(border=True):
-    section_header("Learning loop", "Retain the final incident memory")
-    if not result.memory_matches:
-        st.info(
-            "No close memory matched this alert. Retain the final RCA, then analyze the same alert again to show the before/after memory delta."
+    with st.container(border=True):
+        section_header("Learning loop", "Retain the final incident memory")
+        if not result.memory_matches:
+            st.info(
+                "No close memory matched this alert. Retain the final RCA, then analyze the same alert again to show the before/after memory delta."
+            )
+        root_cause = st.text_input(
+            "Final root cause",
+            value=result.likely_root_causes[0].get("cause", "")
+            if result.likely_root_causes
+            else "",
         )
-    root_cause = st.text_input(
-        "Final root cause",
-        value=result.likely_root_causes[0].get("cause", "")
-        if result.likely_root_causes
-        else "",
-    )
-    lessons = st.text_area(
-        "Lessons learned",
-        value="Add alert annotation, update runbook, and retain exact verification commands.",
-        height=90,
-    )
-    if st.button("Mark resolved and retain memory", type="primary", width="stretch"):
-        content = (
-            f"Resolved incident for {result.incident.service}. Final root cause: {root_cause}.\n"
-            f"Incident object: {result.incident.model_dump_json()}\n"
-            f"Verification commands: {'; '.join(result.verification_commands)}\n"
-            f"Remediation: {'; '.join(result.remediation_suggestions)}\n"
-            f"Lessons learned: {lessons}"
+        lessons = st.text_area(
+            "Lessons learned",
+            value="Add alert annotation, update runbook, and retain exact verification commands.",
+            height=90,
         )
-        st.success(
-            (
-                msg := mem.retain(
-                    content,
-                    context=f"resolved incident: {result.incident.service} {result.incident.error_type}",
+        if st.button("Mark resolved and retain memory", type="primary", width="stretch"):
+            content = (
+                f"Resolved incident for {result.incident.service}. Final root cause: {root_cause}.\n"
+                f"Incident object: {result.incident.model_dump_json()}\n"
+                f"Verification commands: {'; '.join(result.verification_commands)}\n"
+                f"Remediation: {'; '.join(result.remediation_suggestions)}\n"
+                f"Lessons learned: {lessons}"
+            )
+            st.success(
+                (
+                    msg := mem.retain(
+                        content,
+                        context=f"resolved incident: {result.incident.service} {result.incident.error_type}",
+                    )
                 )
             )
+            st.session_state.result = workflow.analyze(raw_alert)
+            st.session_state.memory_fallback = mem.fallback_mode
+            st.session_state.retain_message = (
+                f"{msg}; analysis reran so the new memory is now visible"
+            )
+            st.rerun()
+
+
+with tab_queue:
+    header_cols = st.columns([5, 1])
+    with header_cols[0]:
+        section_header(
+            "Batch triage",
+            "Upload a queue of alerts, watch fingerprint-keyed memory pre-judge the repeats, and see the cost curve drop in real time.",
         )
-        st.session_state.result = workflow.analyze(raw_alert)
-        st.session_state.memory_fallback = mem.fallback_mode
-        st.session_state.retain_message = (
-            f"{msg}; analysis reran so the new memory is now visible"
+    with header_cols[1]:
+        if st.button("Reset cost curve", key="reset_cost_curve"):
+            tracker.reset()
+            st.session_state.queue_results = []
+            st.session_state.override_drafts = {}
+            st.session_state.batch_id = 0
+            st.rerun()
+
+    intake_cols = st.columns([1, 1])
+    with intake_cols[0]:
+        uploaded = st.file_uploader("Upload alerts JSON", type=["json"])
+        use_seed = st.button(
+            "Use packaged seed alerts (100)",
+            help="Loads data/seed_alerts.json directly for the demo.",
         )
-        st.rerun()
+    with intake_cols[1]:
+        pasted = st.text_area("Or paste alerts JSON", height=160)
+
+    analyze_queue_clicked = st.button("Analyze queue", type="primary")
+
+    # Source resolution: the seed button is a one-click demo shortcut that
+    # both loads and analyzes; the "Analyze queue" button picks the most
+    # specific source available — uploaded file > pasted JSON > seed alerts.
+    payload: list | None = None
+    source_label = ""
+
+    if use_seed or analyze_queue_clicked:
+        try:
+            if analyze_queue_clicked and uploaded is not None:
+                payload = json.loads(uploaded.getvalue().decode("utf-8"))
+                source_label = "uploaded file"
+            elif analyze_queue_clicked and pasted.strip():
+                payload = json.loads(pasted)
+                source_label = "pasted JSON"
+            else:
+                # Seed button OR analyze-queue with no other input → load seed file.
+                payload = json.loads(
+                    (ROOT / "data" / "seed_alerts.json").read_text(encoding="utf-8")
+                )
+                source_label = "packaged seed alerts"
+        except json.JSONDecodeError as exc:
+            st.error(f"Could not parse JSON: {exc}")
+            payload = None
+
+        if payload is not None:
+            try:
+                alerts = parse_alerts_payload(payload)
+            except ValueError as exc:
+                st.error(f"Invalid alerts payload: {exc}")
+                alerts = []
+
+            if alerts:
+                limit = max(1, int(os.getenv("OPENRECALL_BATCH_SIZE_LIMIT", "200")))
+                if len(alerts) > limit:
+                    st.warning(
+                        f"Batch trimmed from {len(alerts)} to {limit} (OPENRECALL_BATCH_SIZE_LIMIT)"
+                    )
+                with st.spinner(
+                    f"Analyzing {min(len(alerts), limit)} alerts from {source_label}…"
+                ):
+                    st.session_state.queue_results = workflow.analyze_queue(alerts)
+                st.session_state.batch_id += 1
+                st.session_state.override_drafts = {}
+
+    queue_results = st.session_state.queue_results
+
+    if queue_results:
+        st.markdown(
+            queue_summary_html(queue_results, tracker), unsafe_allow_html=True
+        )
+
+        st.markdown("#### Cost curve")
+        if len(tracker.series()) >= 2:
+            render_cost_curve_chart(tracker)
+        else:
+            st.caption("Cost curve appears once at least two alerts have been recorded.")
+
+        all_dead_ends = collect_all_dead_ends(queue_results)
+        if all_dead_ends:
+            with st.expander("Skip these paths across this batch"):
+                for d in all_dead_ends:
+                    st.markdown(f"- {d}")
+
+        st.markdown("#### Queue")
+        for idx, queue_result in enumerate(queue_results):
+            render_queue_row(idx, queue_result)
+    else:
+        st.info(
+            "No queue results yet. Upload alerts JSON, paste a JSON array, or click 'Use packaged seed alerts (100)', then 'Analyze queue'."
+        )

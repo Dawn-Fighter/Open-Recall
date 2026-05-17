@@ -1,1 +1,14 @@
-[]
+[
+  {
+    "title": "resolved incident: checkout-service crashloopbackoff",
+    "content": "Resolved incident for checkout-service. Final root cause: Container crash from missing/bad configuration value; closest memory suggests: checkout-service CrashLoopBackOff due to bad environment variable.\nIncident object: {\"service\":\"checkout-service\",\"environment\":\"prod\",\"severity\":\"SEV-2\",\"timestamp\":\"2026-05-17T07:25:30.075185+00:00\",\"error_type\":\"crashloopbackoff\",\"affected_dependency\":\"configmap\",\"suspected_recent_change\":\"after deploy\",\"security_relevance\":\"none\",\"raw_alert\":\"SEV-2 prod checkout-service CrashLoopBackOff after deploy 2026.05.16. Pods restart every 40s. Last log: KeyError PAYMENT_PROVIDER_URL. Recent ConfigMap cleanup removed env var. 5xx on checkout started at 14:07 UTC.\",\"lifecycle_phase\":\"detection/analysis\"}\nVerification commands: kubectl -n prod describe deploy/checkout-service; kubectl -n prod logs deploy/checkout-service --previous --tail=200; kubectl -n prod get configmap -o yaml | grep -n \"checkout-service\"; kubectl -n prod get events --sort-by=.lastTimestamp | grep checkout-service\nRemediation: Have the operations lead verify the hypothesis before changing state; Roll back the last config/deploy change if verification confirms regression; Restore the missing ConfigMap/Secret key or roll back the release; Restart only affected pods after config is corrected\nLessons learned: Add alert annotation, update runbook, and retain exact verification commands.",
+    "metadata": {
+      "fingerprint_canonical": "",
+      "triage_decision": null,
+      "dead_ends": [],
+      "analyst_id": null,
+      "business_impact_minutes": null
+    },
+    "timestamp": "2026-05-17T07:25:31.619867+00:00"
+  }
+]

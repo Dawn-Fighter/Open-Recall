@@ -14,7 +14,7 @@ customer data, request bodies, or account identifiers in public reports.
 The repository is a demo implementation. Security fixes should prioritize:
 
 - Secret handling in `.env`, Streamlit settings, and logs.
-- Hindsight retain/recall payload safety.
+- Hindsight Cloud retain/recall payload safety.
 - Prompt injection resistance for incident text passed to model providers.
 - Clear separation between fallback demo data and real retained incident memory.
 
@@ -23,7 +23,24 @@ The repository is a demo implementation. Security fixes should prioritize:
 - Use synthetic or redacted alerts in public demos.
 - Keep `CASCADEFLOW_LIVE_GROQ=false` unless you intentionally want live model
   calls.
-- Do not commit `data/local_memory.json`; it can contain retained incident
-  details from local testing.
+- Memory is backed by Hindsight Cloud at `https://api.hindsight.vectorize.io`,
+  authenticated with a Bearer `HINDSIGHT_API_KEY`. The local Hindsight Docker
+  setup is no longer the supported path; remove any leftover
+  `HINDSIGHT_API_LLM_*` / `HINDSIGHT_API_CONSOLIDATION_*` /
+  `HINDSIGHT_API_RETAIN_*` variables from local `.env` files. They are harmless
+  but unused.
+- When `HINDSIGHT_API_KEY` is unset or the cloud endpoint is unreachable, the
+  cockpit falls back to the deterministic local store
+  (`data/seed_incidents.json` plus `data/local_memory.json`). Treat
+  `data/local_memory.json` as sensitive and do not commit it; the `.gitignore`
+  enforces this.
 - Review Hindsight and Groq deployment settings before using this with real
   production incidents.
+
+### Secret rotation
+
+Any committed `GROQ_API_KEY` or `HINDSIGHT_API_KEY` MUST be rotated at the end
+of the project before publishing the repo publicly. The current development
+`.env` carries live keys for hackathon demo use only. Rotate by issuing a new
+key in the respective provider console, replacing the value in the local `.env`
+(never in source control), and revoking the old credential.

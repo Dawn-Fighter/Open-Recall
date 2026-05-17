@@ -1,4 +1,4 @@
-.PHONY: install run seed smoke compile
+.PHONY: install run seed pbt smoke compile
 
 install:
 	python -m venv .venv
@@ -12,7 +12,10 @@ seed:
 	.venv/bin/python seed_memory.py --limit 5 --delay 0
 
 compile:
-	.venv/bin/python -m compileall app.py incident_agent seed_memory.py scripts/smoke_test.py
+	.venv/bin/python -m compileall app.py incident_agent seed_memory.py scripts/smoke_test.py scripts/generate_seed_alerts.py tests
 
-smoke: compile
+pbt: compile
+	.venv/bin/python -m pytest tests/property -q
+
+smoke: compile pbt
 	.venv/bin/python scripts/smoke_test.py

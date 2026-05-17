@@ -1,0 +1,19 @@
+{
+  "enabled": true,
+  "name": "OpenRecall: signature tests when models or workflow change",
+  "description": "Runs tests/test_signatures.py whenever models.py or workflow.py is saved. The signature suite is the contract for backward compatibility (analyze signature unchanged, AnalysisResult is a strict superset, AlertFingerprint stays frozen, TriageDecision Literal stable). Three-second test, no expensive PBT runs.",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "incident-memory-agent/incident_agent/models.py",
+      "incident-memory-agent/incident_agent/workflow.py",
+      "incident-memory-agent/incident_agent/__init__.py"
+    ]
+  },
+  "then": {
+    "type": "runCommand",
+    "command": "cd incident-memory-agent && python -m pytest tests/test_signatures.py -q --tb=short",
+    "timeout": 60
+  }
+}

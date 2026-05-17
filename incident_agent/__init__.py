@@ -1,3 +1,33 @@
-"""Incident Memory Agent package."""
+"""Incident Memory Agent (OpenRecall) package."""
 
-__all__ = ["memory", "router", "workflow", "models"]
+from .models import (
+    Alert,
+    AlertFingerprint,
+    AnalysisResult,
+    AuditTraceEntry,
+    CostCurvePoint,
+    IncidentObject,
+    IncidentType,
+    MemoryMatch,
+    RouteTrace,
+    TriageDecision,
+    TriageResult,
+)
+
+__all__ = [
+    "memory",
+    "router",
+    "workflow",
+    "models",
+    "Alert",
+    "AlertFingerprint",
+    "AnalysisResult",
+    "AuditTraceEntry",
+    "CostCurvePoint",
+    "IncidentObject",
+    "IncidentType",
+    "MemoryMatch",
+    "RouteTrace",
+    "TriageDecision",
+    "TriageResult",
+]

@@ -5,7 +5,7 @@ import os
 import time
 from typing import Any
 
-from .models import RouteTrace
+from .models import AlertFingerprint, MemoryMatch, RouteTrace, TriageResult
 
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -24,6 +24,9 @@ class CascadeFlowRouter:
         self.status = "cascadeflow not initialized"
         self.cascadeflow_enabled = False
         self.cascadeflow: Any | None = None
+        # Cumulative live-cost tracking and budget enforcement (Task 9.3 / R6.6 / P14).
+        self._cum_live_cost: float = 0.0
+        self._budget_exhausted: bool = False
         self._init_cascadeflow()
 
     def _init_cascadeflow(self) -> None:
@@ -59,25 +62,65 @@ class CascadeFlowRouter:
         except Exception:
             return None, trace
 
+    def fingerprint_with_trace(
+        self, raw_alert: str
+    ) -> tuple[dict[str, Any] | None, RouteTrace]:
+        """Cheap-model JSON extract for the six AlertFingerprint fields (Task 9.1, R3.2/R3.5)."""
+        prompt = (
+            "Extract a structured 'alert DNA' fingerprint from this signal as strict JSON.\n"
+            "Required keys (use empty string if not present): error_class, service_role, "
+            "dependency_pattern, signal_shape, attack_pattern, environment.\n\n"
+            f"Alert:\n{raw_alert}"
+        )
+        content, trace = self._call_model(
+            "alert fingerprint",
+            self.cheap_model,
+            prompt,
+            0.7,
+            "cheap model is sufficient for structured fingerprint extraction",
+        )
+        try:
+            return json.loads(_json_object(content)), trace
+        except Exception:
+            return None, trace
+
     def rca_with_trace(
         self,
         incident: dict[str, Any],
         memories: list[str],
         confidence: float,
         security_relevant: bool,
+        *,
+        dead_ends: list[str] | None = None,
+        force_strong_model: bool = False,
     ) -> tuple[dict[str, Any] | None, RouteTrace]:
-        escalate = confidence < 0.65 or security_relevant
+        # ``force_strong_model`` lets the workflow respect the triage decision
+        # directly: when the TriageEngine proposes ``escalated`` or ``real``,
+        # the router MUST use the strong model regardless of memory match score
+        # or security relevance heuristics (R6.2, R6.3).
+        escalate = force_strong_model or confidence < 0.65 or security_relevant
         model = self.strong_model if escalate else self.cheap_model
-        reason = (
-            "weak memory match or security relevance requires stronger RCA"
-            if escalate
-            else "strong memory match keeps route on cheap model"
-        )
+        if force_strong_model:
+            reason = "triage decision requires strong-model RCA"
+        elif escalate:
+            reason = (
+                "weak memory match or security relevance requires stronger RCA"
+            )
+        else:
+            reason = "strong memory match keeps route on cheap model"
+        dead_ends_section = ""
+        if dead_ends:
+            bullets = "\n".join(f"- {d}" for d in dead_ends[:8])
+            dead_ends_section = (
+                "\nSkip these dead ends (already disproven on similar prior incidents):\n"
+                + bullets
+            )
         prompt = (
             "Produce strict JSON for incident RCA. Keys: likely_root_causes (array of {cause,evidence,confidence}), "
             "verification_commands, remediation_suggestions, containment_notes, postmortem_action_items. Prefer evidence-backed steps.\n\n"
             f"Incident: {json.dumps(incident)}\nSimilar memories:\n"
             + "\n---\n".join(memories[:4])
+            + dead_ends_section
         )
         content, trace = self._call_model(
             "RCA investigation", model, prompt, confidence, reason, escalated=escalate
@@ -86,6 +129,60 @@ class CascadeFlowRouter:
             return json.loads(_json_object(content)), trace
         except Exception:
             return None, trace
+
+    def triage_with_trace(
+        self,
+        fingerprint: AlertFingerprint,
+        triage_result: TriageResult,
+        matches: list[MemoryMatch],
+    ) -> RouteTrace:
+        """Build a synthetic memory-bypass RouteTrace for an alert that skips the LLM.
+
+        Property 6 + Property 15 require this entry to exist in route_trace whenever
+        the strong-model call is bypassed, so the audit panel and cost curve see the
+        bypass and can still report a savings figure against the strong-model
+        baseline.
+        """
+        titles = "; ".join(m.title for m in matches[:4]) or "no titles"
+        n = len(matches)
+        # Approximate baseline using the same prompt-shape we would have sent for RCA.
+        baseline_prompt = (
+            "Produce strict JSON for incident RCA. Keys: likely_root_causes (array of {cause,evidence,confidence}), "
+            "verification_commands, remediation_suggestions, containment_notes, postmortem_action_items. "
+            "Prefer evidence-backed steps.\n\nIncident: {fingerprint_canonical}\nSimilar memories:\n"
+            + "\n---\n".join(m.content for m in matches[:4])
+        )
+        baseline_cost = estimate_cost(baseline_prompt, self.strong_model)
+        top_score = matches[0].score if matches else 0.0
+        consistency = (
+            triage_result.consistent_decision_count / n
+            if n > 0 and triage_result.consistent_decision_count > 0
+            else 0.0
+        )
+        return RouteTrace(
+            step="auto-triage bypass",
+            model="memory-bypass",
+            provider="openrecall",
+            route_reason=(
+                f"memory consistent across {triage_result.consistent_decision_count} "
+                f"prior decisions: {titles}"
+            ),
+            confidence=round(triage_result.triage_confidence, 4),
+            latency_ms=0.0,
+            estimated_cost_usd=0.0,
+            strong_model_baseline_cost_usd=baseline_cost,
+            savings_vs_strong_usd=baseline_cost,
+            escalated=False,
+            cascadeflow_enabled=self.cascadeflow_enabled,
+            live_model_call=False,
+            model_error=None,
+            budget_remaining_usd=max(0.0, round(self.run_budget - self._cum_live_cost, 5)),
+            triage_decision_proposed=triage_result.proposed_decision,
+            memory_match_score=round(top_score, 4),
+            decision_consistency=round(consistency, 4),
+            llm_skipped=True,
+            budget_exhausted=self._budget_exhausted,
+        )
 
     def _call_model(
         self,
@@ -102,28 +199,43 @@ class CascadeFlowRouter:
         content = "{}"
         live_call = False
         model_error = None
+        budget_exhausted_now = False
+
         if self.api_key and self.live_groq:
-            try:
-                if self.cascadeflow_enabled and self.cascadeflow is not None:
-                    with self.cascadeflow.run(
-                        budget=self.run_budget,
-                        max_latency_ms=4500,
-                        kpi_weights={"quality": 0.55, "cost": 0.30, "latency": 0.15},
-                    ):
+            # Best-effort budget enforcement: allow the in-flight call when the
+            # budget is hit, but suppress further live calls afterwards.
+            if self._budget_exhausted:
+                budget_exhausted_now = True
+            else:
+                try:
+                    if self.cascadeflow_enabled and self.cascadeflow is not None:
+                        with self.cascadeflow.run(
+                            budget=self.run_budget,
+                            max_latency_ms=4500,
+                            kpi_weights={"quality": 0.55, "cost": 0.30, "latency": 0.15},
+                        ):
+                            content = self._groq_chat(model, prompt)
+                    else:
                         content = self._groq_chat(model, prompt)
-                else:
-                    content = self._groq_chat(model, prompt)
-                live_call = True
-            except Exception as exc:
-                model_error = exc.__class__.__name__
-                content = json.dumps({"model_error": model_error})
+                    live_call = True
+                    self._cum_live_cost += estimated_cost
+                    if self._cum_live_cost + estimated_cost > self.run_budget:
+                        self._budget_exhausted = True
+                except Exception as exc:
+                    model_error = exc.__class__.__name__
+                    content = json.dumps({"model_error": model_error})
+
         latency_ms = (time.perf_counter() - start) * 1000
-        if self.live_groq and not self.api_key:
+
+        if budget_exhausted_now:
+            route_reason = "run budget exhausted; deterministic fallback"
+        elif self.live_groq and not self.api_key:
             route_reason = f"{reason}; live Groq requested but GROQ_API_KEY is missing"
         elif self.live_groq:
             route_reason = reason
         else:
             route_reason = f"{reason}; deterministic demo mode avoids live Groq rate limits"
+
         trace = RouteTrace(
             step=step,
             model=model,
@@ -137,7 +249,8 @@ class CascadeFlowRouter:
             cascadeflow_enabled=self.cascadeflow_enabled,
             live_model_call=live_call,
             model_error=model_error,
-            budget_remaining_usd=max(0.0, round(self.run_budget - estimated_cost, 5)),
+            budget_remaining_usd=max(0.0, round(self.run_budget - self._cum_live_cost, 5)),
+            budget_exhausted=budget_exhausted_now or self._budget_exhausted,
         )
         return content, trace
 

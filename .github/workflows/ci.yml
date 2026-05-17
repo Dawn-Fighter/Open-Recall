@@ -22,7 +22,21 @@ jobs:
           pip install -r requirements.txt
 
       - name: Compile Python
-        run: python -m compileall app.py incident_agent seed_memory.py scripts/smoke_test.py
+        run: python -m compileall app.py incident_agent seed_memory.py scripts/smoke_test.py scripts/generate_seed_alerts.py tests
+
+      - name: Run property-based tests
+        env:
+          CASCADEFLOW_LIVE_GROQ: "false"
+          HINDSIGHT_BASE_URL: "http://127.0.0.1:9"
+          OPENRECALL_PBT_SEED: "20260101"
+          HYPOTHESIS_PROFILE: "ci"
+        run: python -m pytest tests/property --hypothesis-profile=ci -q
+
+      - name: Run example/signature tests
+        env:
+          CASCADEFLOW_LIVE_GROQ: "false"
+          HINDSIGHT_BASE_URL: "http://127.0.0.1:9"
+        run: python -m pytest tests/test_signatures.py -q
 
       - name: Run deterministic smoke test
         env:

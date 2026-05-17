@@ -1,44 +1,88 @@
 # Demo Runbook
 
-Use this script for a live or recorded walkthrough.
+A 60-second demo script that hits every rubric criterion. Use the live
+Hindsight Cloud + Live Groq mode for the strongest recording.
 
-## 1. Start the App
+## 0. Pre-flight (10 seconds before recording)
 
 ```bash
-source .venv/bin/activate
+export HINDSIGHT_API_KEY=hsk_your_key_here
+export GROQ_API_KEY=gsk_your_key_here
+export CASCADEFLOW_LIVE_GROQ=true
 streamlit run app.py
 ```
 
-The app works immediately in fallback mode. For the strongest integration demo,
-start Hindsight first and set `CASCADEFLOW_LIVE_GROQ=true`.
+Confirm the badges read **Hindsight connected** and **Live model calls** in the
+single-alert tab. If they read fallback or deterministic, the workflow still
+demos but the live integration is not proven.
 
-## 2. Prove Memory Recall
+## 1. Open the Queue tab (0:00 - 0:10)
 
-Select `Known SRE: checkout CrashLoopBackOff`, then click `Analyze incident`.
-The memory recall panel should show a prior checkout or ConfigMap incident. The
-audit trace should include the normalized alert step and RCA investigation step.
+Click the `Queue` tab. Click **`Use packaged seed alerts (100)`**, then
+**`Analyze queue`**.
 
-## 3. Prove Escalation
+Cue: *"This is 100 real-shaped alerts mixed across 8 repeating fingerprint
+families plus 30 false positives, 15 novel reals, and 5 ambiguous."*
 
-Select `Security: WAF SQL injection`. The top badge and audit trace should show
-an escalated route because security-relevant incidents require stronger review.
+## 2. The cost curve (0:10 - 0:30)
 
-## 4. Prove Learning Loop
+Point to the **Cost curve** chart that appears above the queue table:
+- Red line: strong-model-only baseline cost per alert.
+- Blue line: actual cost paid by OpenRecall.
+- Green band: savings from memory.
 
-Select `Learning loop: cold fraud scoring outage`. If no close memory is shown,
-enter the final root cause and click `Mark resolved and retain memory`. The app
-reruns the analysis and the newly retained memory becomes visible.
+Cue: *"This is cascadeflow earning its keep. Every memory hit collapses one
+red point onto the blue line. The wider the green band, the more we saved."*
 
-## 5. Call Out Metrics
+Point to the per-batch summary metrics: **Auto-decided by memory** and
+**Total savings**. Read out the percentages.
 
-Point to:
+## 3. Override an escalated alert (0:30 - 0:45)
 
-- `Run cost`
-- `Saved vs strong-only`
-- `Memory hits`
-- `Route`
-- `Reason`
-- `Live call`
+Pick any row whose triage badge reads `escalated`. Click **`Override`**.
+- Decision: `false_positive`
+- Dead ends: `restarted DB pods, made it worse`
+- Click **`Save & retain`**
 
-These fields make the routing and cost decisions visible instead of hiding them
-behind a chatbot response.
+Watch the row update. Cue: *"This decision and the dead end are now in
+Hindsight Cloud. The next analyst won't waste time restarting DB pods."*
+
+## 4. Re-run the queue (0:45 - 0:55)
+
+Click **`Analyze queue`** again. Watch:
+- The same fingerprint family that was escalated last time now reads
+  `false_positive` with high confidence.
+- The cost curve flattens near zero for those rows.
+- The audit trace expander shows `model: memory-bypass` and `llm_skipped: True`.
+
+Cue: *"The strong model didn't run for those alerts. Hindsight + cascadeflow
+caught it before the LLM call. Property test P6 enforces this invariant
+across every release."*
+
+## 5. Single alert security demo (0:55 - 1:00)
+
+Switch to the **Single alert** tab. Pick `Security: WAF SQL injection`.
+Show the **Hindsight connected**, **Live model calls** badges, and the
+audit trace.
+
+Cue: *"`attack_pattern` is non-empty, so the security-novel kill switch
+fires regardless of memory state. Even if we had 50 consistent strong
+matches, the analyst gets human-approval prompted before the decision is
+applied."*
+
+## What to point to
+
+Throughout the demo, call out:
+- **Hindsight connected** badge — proves live cloud integration.
+- **Cost curve drop** — proves cascadeflow value.
+- **Memory-bypass RouteTrace** in the audit expander — proves zero LLM
+  cost on memory-consistent repeats.
+- **Skip these paths** panel — proves counterfactual memory works
+  end-to-end.
+
+## Offline fallback
+
+If the demo machine has no network, omit the live env vars. The cockpit
+falls back to local JSON memory and deterministic regex fingerprints. The
+cost curve, queue table, override flow, and audit trace all still work —
+only the `Live model calls` badge flips to `Deterministic model output`.

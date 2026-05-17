@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "name": "OpenRecall: re-verify workflow on workflow.py edit",
+  "description": "Asks the agent to walk through the workflow orchestrator contract (analyze signature, bypass condition, force-strong rule, cost-curve recording, audit completeness) whenever incident_agent/workflow.py is edited.",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "incident-memory-agent/incident_agent/workflow.py"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "incident_agent/workflow.py was just edited. Walk through these contracts without restating the file content:\n\n1. Is `analyze(self, raw_alert: str) -> AnalysisResult` signature unchanged? (R1.2)\n2. Does the bypass condition still match `proposed_decision in {false_positive, duplicate, known_benign} AND triage_confidence >= BYPASS_CONFIDENCE_THRESHOLD AND not fingerprint.attack_pattern`? (R6.1, R6.4)\n3. On bypass, is `cost_tracker.record(idx, 0.0, baseline_from_bypass_trace)` called (cost_usd=0.0)? On escalation, is it `cost_tracker.record(idx, sum_cost, sum_baseline)`? (R9.4)\n4. Is `force_strong_model=True` passed to `rca_with_trace` when `triage_result.proposed_decision in {\"escalated\", \"real\"}`? (R6.2, R6.3)\n5. Does `dead_ends` aggregate as `union(metadata.dead_ends across matches)`, deduped, first-seen-wins? (R7.1)\n6. Does `analyze_queue` still call `cost_tracker.begin_batch()`, honor `OPENRECALL_BATCH_SIZE_LIMIT`, and produce a placeholder AnalysisResult with `incident.error_type=\"invalid_alert\"` for empty/malformed entries? (R2.1, R2.5, R10.6)\n7. Is every `AnalysisResult` returned populated with `alert_fingerprint`, `triage_result`, `cost_curve_point`, `dead_ends`, `audit_trace`? (R1.4, R7.1)\n8. Does `len(audit_trace) == len(route_trace)` for every result? (P15)\n9. Run `cd incident-memory-agent && python -m pytest tests/property/test_workflow.py tests/test_signatures.py -q --hypothesis-profile=ci` and report the result.\n\nIf any answer is \"no\" or \"unsure\", stop and tell the user what regressed."
+  }
+}

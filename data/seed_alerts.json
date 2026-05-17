@@ -1,0 +1,402 @@
+[
+  {
+    "title": "Repeat: checkout-service CrashLoopBackOff #1",
+    "raw_alert": "P2 prod checkout-service KeyError PAYMENT_PROVIDER_URL. Triggered after deploy 2026.05.16."
+  },
+  {
+    "title": "Repeat: payments-api DB pool exhausted #3",
+    "raw_alert": "SEV-2 prod payments-api active sessions near pg_stat_activity max. Also seeing payments retries draining the DB pool. Triggered shortly after autoscaler scaled out."
+  },
+  {
+    "title": "Repeat: notifications-service expired SMTP credential #2",
+    "raw_alert": "SEV-3 prod notifications-service SMTP authentication rejected by upstream. Also seeing email delivery failing for transactional sends. Triggered after the rotation reminder went unanswered."
+  },
+  {
+    "title": "Repeat: worker-service Redis timeout #5",
+    "raw_alert": "P3 prod worker-service worker queue age climbing. Also seeing Redis timeout in worker logs. Triggered after Redis cluster failover at 03:12 UTC."
+  },
+  {
+    "title": "Repeat: payments-api DB pool exhausted #1",
+    "raw_alert": "SEV-1 prod payments-api active sessions near pg_stat_activity max. Also seeing timeout waiting for connection from pool. Triggered after worker release increased pool size per pod."
+  },
+  {
+    "title": "Repeat: frontend feature flag 5xx #4",
+    "raw_alert": "SEV-3 prod frontend client-side 500 reports on /checkout. Triggered right after feature flag checkout_redesign was enabled for 25% of users."
+  },
+  {
+    "title": "Repeat: payments-api DB pool exhausted #5",
+    "raw_alert": "SEV-1 prod payments-api 503 spike with database connection errors. Triggered after HPA doubled replicas during traffic spike."
+  },
+  {
+    "title": "Repeat: auth-service ConfigMap missing key #5",
+    "raw_alert": "P2 prod auth-service auth callback returning 500 after deploy. Also seeing login flow 5xx spike on /oauth/callback. Triggered right after the ConfigMap cleanup PR merged."
+  },
+  {
+    "title": "Repeat: worker-service Redis timeout #2",
+    "raw_alert": "SEV-3 prod worker-service worker queue age climbing. Also seeing background job latency increased. Triggered after Redis cluster failover at 03:12 UTC."
+  },
+  {
+    "title": "Repeat: frontend feature flag 5xx #6",
+    "raw_alert": "P3 prod frontend 5xx spike from feature flag cohort. Also seeing JS exception in checkout_redesign component. Triggered after the flag cohort widened overnight."
+  },
+  {
+    "title": "Repeat: waf SQL injection probe #1",
+    "raw_alert": "SEV-2 prod waf WAF grouped SQL injection payloads against /search. Also seeing WAF rule matched 60+ requests in one minute. Triggered preserve request IDs for evidence."
+  },
+  {
+    "title": "Repeat: notifications-service expired SMTP credential #5",
+    "raw_alert": "P3 prod notifications-service email delivery failing for transactional sends. Triggered after the rotation reminder went unanswered."
+  },
+  {
+    "title": "Repeat: auth-service ConfigMap missing key #2",
+    "raw_alert": "SEV-2 prod auth-service pods restarting with missing env var. Triggered right after the ConfigMap cleanup PR merged."
+  },
+  {
+    "title": "Repeat: checkout-service CrashLoopBackOff #3",
+    "raw_alert": "P2 prod checkout-service 5xx on checkout endpoint. Triggered right after the 14:07 UTC release."
+  },
+  {
+    "title": "Repeat: api-gateway JWT validation failure #1",
+    "raw_alert": "P2 prod api-gateway downstream API rejecting tokens minted post-rotation. Also seeing JWKS cache mismatch on gateway pods. Triggered after identity-service key rotation at 02:00 UTC."
+  },
+  {
+    "title": "Repeat: waf SQL injection probe #3",
+    "raw_alert": "SEV-2 prod waf repeated ' OR 1=1-- attempts from rotating ASNs. Also seeing WAF grouped SQL injection payloads against /search. Triggered no recent deploy correlated, looks like external probing."
+  },
+  {
+    "title": "Repeat: api-gateway JWT validation failure #3",
+    "raw_alert": "P2 prod api-gateway auth boundary returning 401 for valid users. Triggered after gateway pods cached the previous keyset."
+  },
+  {
+    "title": "Repeat: notifications-service expired SMTP credential #4",
+    "raw_alert": "P3 prod notifications-service SMTP authentication rejected by upstream. Also seeing expired SMTP credential in secret store. Triggered after the rotation reminder went unanswered."
+  },
+  {
+    "title": "Repeat: checkout-service CrashLoopBackOff #4",
+    "raw_alert": "SEV-2 prod checkout-service CrashLoopBackOff after deploy. Also seeing KeyError PAYMENT_PROVIDER_URL. Triggered after ConfigMap cleanup removed env var."
+  },
+  {
+    "title": "Repeat: api-gateway JWT validation failure #6",
+    "raw_alert": "P2 prod api-gateway JWKS cache mismatch on gateway pods. Also seeing JWT validation failures with 401. Triggered after JWKS overlap window expired."
+  },
+  {
+    "title": "Repeat: worker-service Redis timeout #4",
+    "raw_alert": "P3 prod worker-service worker queue age climbing. Also seeing DNS cache held stale Redis IP. Triggered after Redis cluster failover at 03:12 UTC."
+  },
+  {
+    "title": "Repeat: frontend feature flag 5xx #2",
+    "raw_alert": "SEV-3 prod frontend 5xx spike from feature flag cohort. Also seeing client-side 500 reports on /checkout. Triggered right after feature flag checkout_redesign was enabled for 25% of users."
+  },
+  {
+    "title": "Repeat: waf SQL injection probe #2",
+    "raw_alert": "HIGH prod waf WAF grouped SQL injection payloads against /search. Triggered matches the prior pattern from last week."
+  },
+  {
+    "title": "Repeat: auth-service ConfigMap missing key #6",
+    "raw_alert": "SEV-2 prod auth-service login flow 5xx spike on /oauth/callback. Also seeing pods restarting with missing env var. Triggered shortly after secrets rotation in production."
+  },
+  {
+    "title": "Repeat: frontend feature flag 5xx #3",
+    "raw_alert": "P3 prod frontend JS exception in checkout_redesign component. Triggered after the flag cohort widened overnight."
+  },
+  {
+    "title": "Repeat: auth-service ConfigMap missing key #4",
+    "raw_alert": "P2 prod auth-service login flow 5xx spike on /oauth/callback. Also seeing pods restarting with missing env var. Triggered right after the ConfigMap cleanup PR merged."
+  },
+  {
+    "title": "Repeat: payments-api DB pool exhausted #6",
+    "raw_alert": "SEV-1 prod payments-api 503 spike with database connection errors. Also seeing payments retries draining the DB pool. Triggered shortly after autoscaler scaled out."
+  },
+  {
+    "title": "Repeat: auth-service ConfigMap missing key #1",
+    "raw_alert": "SEV-2 prod auth-service auth callback returning 500 after deploy. Also seeing pods restarting with missing env var. Triggered right after the ConfigMap cleanup PR merged."
+  },
+  {
+    "title": "Repeat: notifications-service expired SMTP credential #7",
+    "raw_alert": "P3 prod notifications-service expired SMTP credential in secret store. Also seeing notifications queue age climbing. Triggered after the secret hit its TTL boundary."
+  },
+  {
+    "title": "Repeat: payments-api DB pool exhausted #4",
+    "raw_alert": "SEV-2 prod payments-api timeout waiting for connection from pool. Also seeing payments retries draining the DB pool. Triggered shortly after autoscaler scaled out."
+  },
+  {
+    "title": "Repeat: payments-api DB pool exhausted #2",
+    "raw_alert": "SEV-1 prod payments-api active sessions near pg_stat_activity max. Also seeing timeout waiting for connection from pool. Triggered after HPA doubled replicas during traffic spike."
+  },
+  {
+    "title": "Repeat: notifications-service expired SMTP credential #6",
+    "raw_alert": "P3 prod notifications-service SMTP authentication rejected by upstream. Also seeing notifications queue age climbing. Triggered after the SMTP credential expired overnight."
+  },
+  {
+    "title": "Repeat: api-gateway JWT validation failure #5",
+    "raw_alert": "SEV-2 prod api-gateway auth boundary returning 401 for valid users. Triggered after identity-service key rotation at 02:00 UTC."
+  },
+  {
+    "title": "Repeat: worker-service Redis timeout #6",
+    "raw_alert": "SEV-3 prod worker-service Redis timeout in worker logs. Also seeing worker queue age climbing. Triggered after Redis cluster failover at 03:12 UTC."
+  },
+  {
+    "title": "Repeat: worker-service Redis timeout #3",
+    "raw_alert": "SEV-3 prod worker-service DNS cache held stale Redis IP. Also seeing Redis timeout in worker logs. Triggered after Redis cluster failover at 03:12 UTC."
+  },
+  {
+    "title": "Repeat: waf SQL injection probe #7",
+    "raw_alert": "SEV-2 prod waf repeated ' OR 1=1-- attempts from rotating ASNs. Also seeing SQLi probes against api-gateway. Triggered preserve request IDs for evidence."
+  },
+  {
+    "title": "Repeat: notifications-service expired SMTP credential #1",
+    "raw_alert": "SEV-3 prod notifications-service notifications queue age climbing. Also seeing outbound mail dropping with 535 auth error. Triggered after the secret hit its TTL boundary."
+  },
+  {
+    "title": "Repeat: api-gateway JWT validation failure #4",
+    "raw_alert": "SEV-2 prod api-gateway intermittent 401 on /api endpoints. Also seeing downstream API rejecting tokens minted post-rotation. Triggered after JWKS overlap window expired."
+  },
+  {
+    "title": "Repeat: checkout-service CrashLoopBackOff #5",
+    "raw_alert": "SEV-2 prod checkout-service 5xx on checkout endpoint. Triggered after ConfigMap cleanup removed env var."
+  },
+  {
+    "title": "Repeat: checkout-service CrashLoopBackOff #6",
+    "raw_alert": "P2 prod checkout-service pods restart every 40s. Also seeing CrashLoopBackOff after deploy. Triggered right after the 14:07 UTC release."
+  },
+  {
+    "title": "Repeat: waf SQL injection probe #4",
+    "raw_alert": "SEV-2 prod waf WAF rule matched 60+ requests in one minute. Also seeing WAF grouped SQL injection payloads against /search. Triggered no recent deploy correlated, looks like external probing."
+  },
+  {
+    "title": "Repeat: waf SQL injection probe #5",
+    "raw_alert": "HIGH prod waf app 500s correlated with blocked WAF events. Triggered matches the prior pattern from last week."
+  },
+  {
+    "title": "Repeat: auth-service ConfigMap missing key #3",
+    "raw_alert": "SEV-2 prod auth-service auth callback returning 500 after deploy. Also seeing pods restarting with missing env var. Triggered after deploy 2026.05.14 rolled the auth manifest."
+  },
+  {
+    "title": "Repeat: frontend feature flag 5xx #5",
+    "raw_alert": "SEV-3 prod frontend 5xx spike from feature flag cohort. Also seeing Cannot read properties of undefined reading cart.total. Triggered right after feature flag checkout_redesign was enabled for 25% of users."
+  },
+  {
+    "title": "Repeat: api-gateway JWT validation failure #2",
+    "raw_alert": "P2 prod api-gateway JWKS cache mismatch on gateway pods. Also seeing intermittent 401 on /api endpoints. Triggered after identity-service key rotation at 02:00 UTC."
+  },
+  {
+    "title": "Repeat: frontend feature flag 5xx #1",
+    "raw_alert": "P3 prod frontend errors limited to 25% rollout cohort. Also seeing Cannot read properties of undefined reading cart.total. Triggered right after feature flag checkout_redesign was enabled for 25% of users."
+  },
+  {
+    "title": "Repeat: waf SQL injection probe #6",
+    "raw_alert": "SEV-2 prod waf SQLi probes against api-gateway. Also seeing WAF grouped SQL injection payloads against /search. Triggered no recent deploy correlated, looks like external probing."
+  },
+  {
+    "title": "Repeat: notifications-service expired SMTP credential #3",
+    "raw_alert": "SEV-3 prod notifications-service expired SMTP credential in secret store. Triggered after the rotation reminder went unanswered."
+  },
+  {
+    "title": "Repeat: worker-service Redis timeout #1",
+    "raw_alert": "SEV-3 prod worker-service worker queue age climbing. Also seeing Redis timeout in worker logs. Triggered after the cache node IP rotated."
+  },
+  {
+    "title": "Repeat: checkout-service CrashLoopBackOff #2",
+    "raw_alert": "P2 prod checkout-service KeyError PAYMENT_PROVIDER_URL. Also seeing CrashLoopBackOff after deploy. Triggered right after the 14:07 UTC release."
+  },
+  {
+    "title": "FP: scheduled DR drill #3",
+    "raw_alert": "LOW platform quarterly DR drill triggered region failover, monitoring alerts firing as expected. No customer impact reported."
+  },
+  {
+    "title": "FP: dependabot #3",
+    "raw_alert": "LOW ci-bot dependabot security advisory on dev dependency, routed to prod channel. No customer impact reported."
+  },
+  {
+    "title": "FP: corp pen-test scanner #2",
+    "raw_alert": "LOW api-gateway internal pen-test scanner from corp ASN scanning prod gateway endpoints. No customer impact reported."
+  },
+  {
+    "title": "FP: synthetic monitor #4",
+    "raw_alert": "LOW synthetic-monitor synthetic monitor in eu-west-1 paging on its own auth misconfig. No customer impact reported."
+  },
+  {
+    "title": "FP: dependabot #1",
+    "raw_alert": "INFO ci-bot dependabot PR alert mistakenly tagged production by repo workflow. No customer impact reported."
+  },
+  {
+    "title": "FP: synthetic monitor #3",
+    "raw_alert": "INFO synthetic-monitor synthetic monitor in eu-west-1 paging on its own auth misconfig. No customer impact reported."
+  },
+  {
+    "title": "FP: dependabot #5",
+    "raw_alert": "LOW ci-bot dependabot PR alert mistakenly tagged production by repo workflow. No customer impact reported."
+  },
+  {
+    "title": "FP: scheduled DR drill #2",
+    "raw_alert": "LOW platform DR exercise paused replication, lag alert firing per runbook. No customer impact reported."
+  },
+  {
+    "title": "FP: dependabot #4",
+    "raw_alert": "INFO ci-bot automated dependency PR opened, alert pipeline tagged severity prod. No customer impact reported."
+  },
+  {
+    "title": "FP: scheduled vuln scan #3",
+    "raw_alert": "LOW staging-frontend vuln-scanner-job touched staging endpoints, paged the prod oncall. No customer impact reported."
+  },
+  {
+    "title": "FP: corp pen-test scanner #5",
+    "raw_alert": "INFO api-gateway authorized pen-test traffic flagged by IDS as suspicious. No customer impact reported."
+  },
+  {
+    "title": "FP: scheduled vuln scan #5",
+    "raw_alert": "INFO staging-frontend scheduled vulnerability scan on staging-frontend, alert misrouted to prod channel. No customer impact reported."
+  },
+  {
+    "title": "FP: dependabot #2",
+    "raw_alert": "LOW ci-bot dependabot security advisory on dev dependency, routed to prod channel. No customer impact reported."
+  },
+  {
+    "title": "FP: scheduled DR drill #4",
+    "raw_alert": "LOW platform quarterly DR drill triggered region failover, monitoring alerts firing as expected. No customer impact reported."
+  },
+  {
+    "title": "FP: corp pen-test scanner #3",
+    "raw_alert": "LOW api-gateway internal pen-test scanner from corp ASN scanning prod gateway endpoints. No customer impact reported."
+  },
+  {
+    "title": "FP: internal load test #2",
+    "raw_alert": "INFO payments-api k6 load test from sre-toolkit run window, traffic above SLO by design. No customer impact reported."
+  },
+  {
+    "title": "FP: scheduled DR drill #5",
+    "raw_alert": "LOW platform DR exercise paused replication, lag alert firing per runbook. No customer impact reported."
+  },
+  {
+    "title": "FP: corp pen-test scanner #1",
+    "raw_alert": "INFO api-gateway internal pen-test scanner from corp ASN scanning prod gateway endpoints. No customer impact reported."
+  },
+  {
+    "title": "FP: synthetic monitor #1",
+    "raw_alert": "LOW synthetic-monitor synthetic monitor in eu-west-1 paging on its own auth misconfig. No customer impact reported."
+  },
+  {
+    "title": "FP: scheduled vuln scan #4",
+    "raw_alert": "INFO staging-frontend scheduled vulnerability scan on staging-frontend, alert misrouted to prod channel. No customer impact reported."
+  },
+  {
+    "title": "FP: synthetic monitor #2",
+    "raw_alert": "LOW synthetic-monitor datadog synthetic check using rotated API token, expected 401 looks like an outage. No customer impact reported."
+  },
+  {
+    "title": "FP: corp pen-test scanner #4",
+    "raw_alert": "LOW api-gateway internal pen-test scanner from corp ASN scanning prod gateway endpoints. No customer impact reported."
+  },
+  {
+    "title": "FP: scheduled vuln scan #1",
+    "raw_alert": "LOW staging-frontend weekly Nessus scan against staging hit prod alert routing rule by mistake. No customer impact reported."
+  },
+  {
+    "title": "FP: internal load test #4",
+    "raw_alert": "INFO payments-api scheduled capacity-test traffic flagged as anomaly by traffic alerting. No customer impact reported."
+  },
+  {
+    "title": "FP: internal load test #3",
+    "raw_alert": "INFO payments-api k6 load test from sre-toolkit run window, traffic above SLO by design. No customer impact reported."
+  },
+  {
+    "title": "FP: scheduled DR drill #1",
+    "raw_alert": "INFO platform quarterly DR drill triggered region failover, monitoring alerts firing as expected. No customer impact reported."
+  },
+  {
+    "title": "FP: internal load test #1",
+    "raw_alert": "LOW payments-api scheduled capacity-test traffic flagged as anomaly by traffic alerting. No customer impact reported."
+  },
+  {
+    "title": "FP: synthetic monitor #5",
+    "raw_alert": "LOW synthetic-monitor datadog synthetic check using rotated API token, expected 401 looks like an outage. No customer impact reported."
+  },
+  {
+    "title": "FP: internal load test #5",
+    "raw_alert": "INFO payments-api scheduled capacity-test traffic flagged as anomaly by traffic alerting. No customer impact reported."
+  },
+  {
+    "title": "FP: scheduled vuln scan #2",
+    "raw_alert": "INFO staging-frontend weekly Nessus scan against staging hit prod alert routing rule by mistake. No customer impact reported."
+  },
+  {
+    "title": "Novel: analytics-pipeline BigQuery quota exceeded",
+    "raw_alert": "SEV-3 prod analytics-pipeline daily job failed: BigQuery quota exceeded for concurrent slot usage. Downstream dashboards stale, refresh job retrying with backoff."
+  },
+  {
+    "title": "Novel: auth-broker MFA failing for offline TOTP",
+    "raw_alert": "SEV-2 prod auth-broker MFA challenges failing for users with offline TOTP devices after a clock-drift correction. Online push MFA still working, only TOTP-derived codes rejected."
+  },
+  {
+    "title": "Novel: feature-store stale read after backfill",
+    "raw_alert": "SEV-3 prod feature-store stale read on user_segments after batch backfill ran overnight. ML scoring service computing decisions on yesterday's segment assignments for a subset of users."
+  },
+  {
+    "title": "Novel: chargeback-service late-night zero-row anomaly",
+    "raw_alert": "SEV-3 prod chargeback-service late-night batch produced zero rows for the first time in 18 months. Upstream provider feed looked healthy. No exception raised, anomaly detector caught it on the morning review."
+  },
+  {
+    "title": "Novel: metrics-collector OOMKilled after relabeling",
+    "raw_alert": "SEV-2 prod metrics-collector pods OOMKilled after Prometheus relabeling rules expanded series cardinality by an order of magnitude. Heap usage doubled within minutes of the new scrape config landing."
+  },
+  {
+    "title": "Novel: geo-router 503 in eu-west-1",
+    "raw_alert": "SEV-2 prod geo-router returning 503 Service Unavailable in eu-west-1. Other regions healthy. Edge load balancer reporting no healthy upstreams in that AZ."
+  },
+  {
+    "title": "Novel: report-renderer PDF hang",
+    "raw_alert": "SEV-3 prod report-renderer PDF generation hanging on customer report 47291. Worker thread stuck in headless browser layout, queue draining slower than incoming requests."
+  },
+  {
+    "title": "Novel: event-bus consumer lag on payments.received",
+    "raw_alert": "SEV-2 prod event-bus consumer lag spike on payments.received topic. Lag jumped from seconds to 40 minutes for the settlement consumer group while producer rate stayed flat."
+  },
+  {
+    "title": "Novel: password-policy-service rate limit shadow ban",
+    "raw_alert": "SEV-2 prod password-policy-service rate limit shadow-banning legit users after the new sliding window policy went live. Users see silent failures on password change with no error surfaced."
+  },
+  {
+    "title": "Novel: istiod high CPU after VirtualService update",
+    "raw_alert": "SEV-2 prod service-mesh-istiod high CPU usage after VirtualService update added 60+ host matches. Sidecar config push latency climbed and proxies stale by minutes."
+  },
+  {
+    "title": "Novel: kms-proxy decrypt latency above SLO",
+    "raw_alert": "SEV-2 prod kms-proxy decrypt latency p99 above SLO at 4.2s. Downstream services depending on per-request decryption seeing checkout and tokenization paths slow in lockstep."
+  },
+  {
+    "title": "Novel: mobile-api iOS 401 after sso refresh regression",
+    "raw_alert": "SEV-2 prod mobile-api iOS users hitting 401 after sso refresh token regression in the latest mobile build. Android cohort unaffected. Logs show refresh tokens rejected immediately on rotation."
+  },
+  {
+    "title": "Novel: data-export-worker S3 multipart stalls",
+    "raw_alert": "SEV-3 prod data-export-worker S3 multipart upload stalls midway through 4GB exports. Part uploads succeed, completion call hangs. Affecting nightly compliance exports."
+  },
+  {
+    "title": "Novel: cdn-edge cache poisoning suspected",
+    "raw_alert": "HIGH prod cdn-edge cache poisoning suspected on /api/products. Some users seeing another tenant's response payloads. Vary header looks misconfigured for the endpoint at the edge."
+  },
+  {
+    "title": "Novel: dns-resolver-service DNSResolutionFailure",
+    "raw_alert": "SEV-2 production dns-resolver-service reporting DNSResolutionFailure on internal .svc.cluster.local domains after CoreDNS rollout. Multiple consumer services logging upstream DNS lookups timing out around the rollout window."
+  },
+  {
+    "title": "Ambiguous: frontend 504 across upstreams",
+    "raw_alert": "SEV-3 prod frontend tracing reports 504 timeouts intermittently against multiple possible upstreams. Trace samples ambiguous between gateway, search, and recommendations as the slow hop."
+  },
+  {
+    "title": "Ambiguous: profile-service intermittent cache miss",
+    "raw_alert": "SEV-3 prod profile-service intermittent cache misses that may correlate with deploy 2026.05.18, but the ratio is within normal weekly variance. Unknown owner, possibly platform or service team."
+  },
+  {
+    "title": "Ambiguous: frontend 5xx spike across cohorts",
+    "raw_alert": "SEV-3 prod ambiguous frontend 5xx spike across 3 cohorts with unknown owner. Errors split between checkout, profile, and search bundles. No single deploy correlates."
+  },
+  {
+    "title": "Ambiguous: payments-api intermittent 503",
+    "raw_alert": "P2 prod payments-api intermittent 503 with no obvious change in deploy logs. Multiple possible owners on call, ambiguous root cause across DB, cache, and third-party processor signals."
+  },
+  {
+    "title": "Ambiguous: payments retry storm",
+    "raw_alert": "SEV-2 prod payments retry storm with ambiguous root cause; no obvious deploy or config change. Retry budget burning fast across multiple downstreams. Unknown owner pending triage."
+  }
+]

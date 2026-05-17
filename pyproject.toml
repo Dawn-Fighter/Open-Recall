@@ -1,7 +1,7 @@
 [project]
-name = "incident-memory-agent"
-version = "0.1.0"
-description = "Streamlit incident response cockpit with Hindsight memory and CascadeFlow-style routing traces."
+name = "openrecall"
+version = "0.2.0"
+description = "OpenRecall — alert triage co-pilot with Hindsight memory, cascadeflow runtime intelligence, and counterfactual dead-end recall."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -12,6 +12,13 @@ dependencies = [
   "httpx>=0.27.0",
   "hindsight-client>=0.1.0",
   "cascadeflow[groq]>=0.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "hypothesis>=6.108",
+  "pytest>=8.0",
+  "altair>=5.2",
 ]
 
 [tool.setuptools.packages.find]

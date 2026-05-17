@@ -1,46 +1,163 @@
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 
+from pydantic import ValidationError
+
+from .audit import AuditTraceRecorder
+from .cost_curve import CostCurveTracker
+from .fingerprint import (
+    FingerprintGenerator,
+    infer_dependency,
+    infer_error_type,
+    pick_known_service,
+)
 from .memory import IncidentMemory
 from .models import (
+    Alert,
+    AlertFingerprint,
     AnalysisResult,
+    AuditTraceEntry,
+    CostCurvePoint,
     IncidentObject,
     IncidentType,
     MemoryMatch,
     RouteTrace,
+    TriageResult,
     utc_now,
 )
 from .router import CascadeFlowRouter
+from .triage import BYPASS_CONFIDENCE_THRESHOLD, TriageEngine
 
 
 class IncidentWorkflow:
-    def __init__(self, memory: IncidentMemory, router: CascadeFlowRouter) -> None:
+    """OpenRecall workflow orchestrator.
+
+    Coordinates fingerprint extraction, fingerprint-keyed memory recall,
+    triage proposal, optional strong-model RCA, deterministic RCA, cost
+    curve recording, and audit trace assembly. The single-alert
+    ``analyze(raw_alert)`` entry point preserves its pre-OpenRecall
+    signature; ``analyze_queue`` iterates ``analyze`` so retain visibility
+    from alert N to N+1 is observable in the same Streamlit session.
+    """
+
+    def __init__(
+        self,
+        memory: IncidentMemory,
+        router: CascadeFlowRouter,
+        cost_tracker: CostCurveTracker | None = None,
+    ) -> None:
         self.memory = memory
         self.router = router
+        self.cost_tracker = (
+            cost_tracker if cost_tracker is not None else CostCurveTracker()
+        )
+        self.fingerprint_generator = FingerprintGenerator(router)
+        self.triage_engine = TriageEngine()
+        self._alert_index = 0
 
     def analyze(self, raw_alert: str) -> AnalysisResult:
+        # (a) Existing normalization + classification path
         llm_incident, normalize_trace = self.router.normalize_with_trace(raw_alert)
         incident = self._normalize(raw_alert, llm_incident)
         incident_type = self._classify(incident, raw_alert)
         impact = self._impact(incident, raw_alert)
         evidence = self._evidence_to_preserve(incident_type, incident)
-        recall_query = f"{incident.service} {incident.error_type} {incident.affected_dependency or ''} {incident.suspected_recent_change or ''} {raw_alert}"
-        matches = self.memory.recall(recall_query, limit=5)
+
+        # (b) Fingerprint
+        fingerprint, fingerprint_trace = self.fingerprint_generator.generate(raw_alert)
+
+        # (c) Memory recall by fingerprint (local recall falls back to the
+        # concatenated fingerprint fields when fp is empty).
+        matches = self.memory.recall_by_fingerprint(fingerprint, limit=5)
+
+        # Reflection (existing path)
         reflection = self.memory.reflect(
-            f"Reflect on repeated incident patterns and useful lessons for: {recall_query}",
+            f"Reflect on repeated incident patterns and useful lessons for fingerprint: {fingerprint}",
             matches,
         )
-        match_confidence = self._effective_confidence(raw_alert, matches)
-        rca_json, rca_trace = self.router.rca_with_trace(
-            incident.model_dump(),
-            [m.content for m in matches],
-            match_confidence,
-            incident_type in {"Security", "Hybrid"},
+
+        # (d) Triage
+        triage_result = self.triage_engine.triage(fingerprint, matches)
+
+        # (e/f) Bypass vs RCA
+        route_trace: list[RouteTrace] = [normalize_trace, fingerprint_trace]
+        rca_json: dict[str, Any] | None = None
+        bypass = (
+            triage_result.proposed_decision
+            in {"false_positive", "duplicate", "known_benign"}
+            and triage_result.triage_confidence >= BYPASS_CONFIDENCE_THRESHOLD
+            and not fingerprint.attack_pattern
         )
+
+        # Aggregate dead_ends from matched memory metadata (deduped, first-seen wins).
+        dead_ends: list[str] = []
+        seen_dead: set[str] = set()
+        for match in matches:
+            for entry in match.metadata.get("dead_ends") or []:
+                text = str(entry).strip()
+                if text and text not in seen_dead:
+                    seen_dead.add(text)
+                    dead_ends.append(text)
+
+        if bypass:
+            bypass_trace = self.router.triage_with_trace(
+                fingerprint, triage_result, matches
+            )
+            route_trace.append(bypass_trace)
+        else:
+            match_confidence = self._effective_confidence(raw_alert, matches)
+            # R6.2 + R6.3: when triage proposes escalated or real, the strong
+            # model must be invoked regardless of the cheap-model match-score
+            # heuristic. Pass force_strong_model=True so the router honors the
+            # triage decision.
+            force_strong_model = triage_result.proposed_decision in {
+                "escalated",
+                "real",
+            }
+            rca_json, rca_trace = self.router.rca_with_trace(
+                incident.model_dump(),
+                [m.content for m in matches],
+                match_confidence,
+                incident_type in {"Security", "Hybrid"},
+                dead_ends=dead_ends,
+                force_strong_model=force_strong_model,
+            )
+            route_trace.append(rca_trace)
+
+        # Deterministic RCA always runs so verification commands and runbook
+        # text exist even on bypass.
         deterministic = self._deterministic_rca(incident, matches, incident_type)
         merged = merge_rca(deterministic, rca_json)
+
+        # (g) Cost curve point. Per R9.4, when the alert triggers an LLM
+        # bypass we record cost_usd=0.0 while preserving the strong-model
+        # baseline so the savings band stays meaningful. On escalation we sum
+        # all route_trace entries for honest bookkeeping.
+        if bypass:
+            # bypass_trace is the last entry; baseline still reflects the
+            # full strong-model RCA prompt that was skipped.
+            bypass_baseline = route_trace[-1].strong_model_baseline_cost_usd
+            cost_point = self.cost_tracker.record(
+                self._alert_index, 0.0, bypass_baseline
+            )
+        else:
+            total_cost = sum(t.estimated_cost_usd for t in route_trace)
+            total_baseline = sum(
+                t.strong_model_baseline_cost_usd for t in route_trace
+            )
+            cost_point = self.cost_tracker.record(
+                self._alert_index, total_cost, total_baseline
+            )
+        self._alert_index += 1
+
+        # (h) Audit trace
+        audit_trace = AuditTraceRecorder.build(
+            fingerprint, matches, triage_result, route_trace, cost_point
+        )
+
         return AnalysisResult(
             incident=incident,
             incident_type=incident_type,
@@ -66,9 +183,102 @@ class IncidentWorkflow:
                 "Post-incident: retain final RCA, commands, and lessons learned",
             ],
             postmortem_action_items=merged["postmortem_action_items"],
-            route_trace=[model_to_dict(normalize_trace), model_to_dict(rca_trace)],
+            route_trace=[model_to_dict(t) for t in route_trace],
             hindsight_status=self.memory.status,
             fallback_mode=self.memory.fallback_mode,
+            # OpenRecall additions
+            alert_fingerprint=fingerprint,
+            triage_result=triage_result,
+            cost_curve_point=cost_point,
+            dead_ends=dead_ends,
+            audit_trace=audit_trace,
+        )
+
+    def analyze_queue(self, alerts: list[Alert]) -> list[AnalysisResult]:
+        """Process a batch of alerts in submission order.
+
+        Marks a new batch boundary on the cost tracker and processes each
+        alert sequentially so retain visibility from N to N+1 is observable.
+
+        Malformed entries (missing/empty raw_alert, Pydantic-validation
+        failure) produce a placeholder AnalysisResult with
+        ``incident.error_type="invalid_alert"`` and a single
+        AuditTraceEntry carrying the rejection reason. Processing continues
+        to the next entry.
+        """
+        self.cost_tracker.begin_batch()
+
+        # Honor OPENRECALL_BATCH_SIZE_LIMIT (Task 10.6).
+        limit = max(1, int(os.getenv("OPENRECALL_BATCH_SIZE_LIMIT", "200")))
+        if len(alerts) > limit:
+            alerts = alerts[:limit]
+
+        results: list[AnalysisResult] = []
+        for entry in alerts:
+            try:
+                raw = (entry.raw_alert or "").strip()
+            except AttributeError:
+                raw = ""
+            if not raw:
+                results.append(
+                    self._invalid_alert_result("missing or empty raw_alert")
+                )
+                continue
+            try:
+                results.append(self.analyze(raw))
+            except ValidationError as exc:
+                results.append(
+                    self._invalid_alert_result(f"pydantic validation: {exc}")
+                )
+            except Exception as exc:
+                # Last-resort guard so the batch survives a single bad entry.
+                results.append(
+                    self._invalid_alert_result(
+                        f"workflow error: {exc.__class__.__name__}"
+                    )
+                )
+        return results
+
+    def _invalid_alert_result(self, reason: str) -> AnalysisResult:
+        placeholder_incident = IncidentObject(error_type="invalid_alert")
+        audit = [
+            AuditTraceEntry(
+                step="batch validation",
+                model="memory-bypass",
+                route_reason=f"batch entry rejected: {reason}",
+                memory_hit_count=0,
+                proposed_decision=None,
+                escalation_reason=reason,
+                live_model_call=False,
+                llm_skipped=True,
+                cost_usd=0.0,
+                baseline_cost_usd=0.0,
+                savings_usd=0.0,
+            )
+        ]
+        return AnalysisResult(
+            incident=placeholder_incident,
+            incident_type="SRE",
+            impact_level="invalid",
+            blast_radius_guess="invalid alert; not analyzed",
+            evidence_to_preserve=[],
+            memory_matches=[],
+            memory_reflection="invalid alert; no memory consulted",
+            likely_root_causes=[],
+            verification_commands=[],
+            remediation_suggestions=[],
+            containment_notes=[],
+            roles={},
+            timeline_notes=[],
+            postmortem_action_items=[],
+            route_trace=[],
+            hindsight_status=self.memory.status,
+            fallback_mode=self.memory.fallback_mode,
+            alert_fingerprint=None,
+            triage_result=None,
+            cost_curve_point=None,
+            dead_ends=[],
+            audit_trace=audit,
         )
 
     def _effective_confidence(
@@ -372,70 +582,6 @@ def stringify_list_item(item: Any) -> str:
 def pick(pattern: str, text: str) -> str | None:
     m = re.search(pattern, text)
     return m.group(1) if m else None
-
-
-def pick_known_service(text: str) -> str | None:
-    known_services = [
-        "auth-service",
-        "checkout-service",
-        "payments-api",
-        "worker-service",
-        "frontend",
-        "orders-api",
-        "notifications-service",
-        "identity-service",
-        "waf",
-        "api-gateway",
-        "catalog-api",
-        "billing-worker",
-        "search-service",
-        "inventory-service",
-        "realtime-api",
-        "admin-api",
-        "webhook-service",
-        "profile-service",
-    ]
-    for service in known_services:
-        if service in text:
-            return service
-    return None
-
-
-def infer_error_type(text: str) -> str:
-    for key in [
-        "crashloopbackoff",
-        "oomkill",
-        "oom",
-        "liveness",
-        "readiness",
-        "5xx",
-        "timeout",
-        "sql injection",
-        "jwt",
-        "credential stuffing",
-        "pool exhausted",
-        "migration lock",
-    ]:
-        if key in text:
-            return key
-    return "application error"
-
-
-def infer_dependency(text: str) -> str | None:
-    for dep in [
-        "postgres",
-        "database",
-        "redis",
-        "smtp",
-        "stripe",
-        "identity",
-        "jwks",
-        "configmap",
-        "feature flag",
-    ]:
-        if dep in text:
-            return dep
-    return None
 
 
 def infer_change(text: str) -> str | None:

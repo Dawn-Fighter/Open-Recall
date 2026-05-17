@@ -1,7 +1,9 @@
-# Handover
+# Handover — OpenRecall
 
-This repository includes the app code, docs, demo data, `.env`, and the current
-local retained memory file.
+This repository ships the OpenRecall alert triage cockpit, the supporting
+package code, the synthetic demo data, and the test suite. Live secrets
+(`.env`) and per-session retained memory (`data/local_memory.json`) are
+intentionally gitignored.
 
 ## Run It
 
@@ -14,26 +16,38 @@ Or manually:
 
 ```bash
 python -m venv .venv
+# Linux / macOS
 source .venv/bin/activate
+# Windows
+# .venv\Scripts\activate
 pip install -r requirements.txt
+cp .env.example .env  # then edit .env with your keys
 streamlit run app.py
 ```
 
 ## Validate It
 
 ```bash
-make smoke
+make compile  # python -m compileall ...
+make pbt      # property-based tests under tests/property/
+make smoke    # offline smoke + queue smoke + .env.example schema
 ```
 
-The smoke test runs in deterministic fallback mode and does not require
-Hindsight Docker or Groq credentials.
+The smoke test runs in deterministic offline mode (`HINDSIGHT_BASE_URL=
+http://127.0.0.1:9`, `CASCADEFLOW_LIVE_GROQ=false`) and does not require
+network access.
 
-## Included Runtime State
+## Runtime State
 
-- `.env` is tracked for handoff convenience.
-- `data/local_memory.json` is tracked so the learning-loop state is included.
-- `.venv/`, caches, and logs are not tracked because they are generated and
-  machine-specific.
+- `.env` is **not tracked**. Copy `.env.example` and fill in keys.
+- `data/local_memory.json` is **not tracked**. The local fallback persists
+  retained triage decisions there during demos; the file is gitignored to
+  prevent leaking analyst IDs, business-impact minutes, or fingerprint
+  metadata into source control.
+- `.venv/`, `__pycache__/`, `.hypothesis/`, and other generated files are
+  gitignored.
 
-Before pushing to a public remote, review `.env` and rotate or remove any real
-tokens.
+## Before Pushing Public
+
+Rotate any keys that touched `.env` during local development, then push.
+`SECURITY.md` documents the rotation steps.
